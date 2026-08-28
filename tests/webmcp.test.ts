@@ -48,7 +48,7 @@ async function runWebMCPTests() {
   await initializeWebMCPTools();
 
   const baseTools = await modelContext.getTools();
-  assert(baseTools.length === 5, 'Exactly five focused base tools are registered');
+  assert(baseTools.length === 6, 'Exactly six focused base tools are registered');
   assert(baseTools.some((tool) => tool.name === 'request_repair'), 'Repair handoff is exposed through WebMCP');
   assert(!baseTools.some((tool) => tool.name === 'resume_intent'), 'Resume is absent before a repair is deployed');
 
@@ -64,14 +64,22 @@ async function runWebMCPTests() {
   assert(inspectResult.failure.request.httpStatus === 500, 'Agent receives correlated HTTP failure context');
   assert(inspectResult.failure.source.line === 42, 'Agent receives relevant source context');
 
+  const contextTool = baseTools.find((tool) => tool.name === 'add_user_context')!;
+  const contextResult = await modelContext.executeTool(
+    contextTool,
+    JSON.stringify({ intentId: 'int_2841', text: 'I only need the delivery step retried; keep the invoice unchanged.' }),
+  );
+  assert(contextResult.accepted === true, 'Agent can attach user context without repository authority');
+
   const requestRepairTool = baseTools.find((tool) => tool.name === 'request_repair')!;
   const repairResult = await modelContext.executeTool(requestRepairTool, JSON.stringify({ intentId: 'int_2841' }));
   assert(repairResult.repairJob.approvalRequired === true, 'Agent can propose but cannot deploy the repair');
 
-  await intentRuntime.deployRepair(repairResult.repairJob.id);
+  for (let index = 0; index < 5; index++) await intentRuntime.refreshFromServer();
+  await intentRuntime.deployRepair(intentRuntime.getRepairJob()!.id);
   const repairedTools = await modelContext.getTools();
   const resumeTool = repairedTools.find((tool) => tool.name === 'resume_intent');
-  assert(repairedTools.length === 6 && Boolean(resumeTool), 'resume_intent appears only after approved deployment');
+  assert(repairedTools.length === 7 && Boolean(resumeTool), 'resume_intent appears only after approved deployment');
 
   const resumeResult = await modelContext.executeTool(resumeTool!, JSON.stringify({ intentId: 'int_2841' }));
   assert(resumeResult.status === 'completed', 'WebMCP resumes only the missing workflow step');
@@ -83,7 +91,7 @@ async function runWebMCPTests() {
 
   await new Promise((resolve) => setTimeout(resolve, 1));
   const completedTools = await modelContext.getTools();
-  assert(completedTools.length === 5, 'Dynamic resume tool is removed after completion');
+  assert(completedTools.length === 6, 'Dynamic resume tool is removed after completion');
 
   console.log(`\nResults: ${passed} Passed, ${failed} Failed\n`);
   if (failed > 0) process.exit(1);

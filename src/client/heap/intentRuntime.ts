@@ -18,6 +18,7 @@ export class IntentRuntime {
   private repairJob: RepairJob | null = null;
   private invoiceCreateCount = 0;
   private api: DemoApi = httpDemoApi;
+  private repairPollTimer: ReturnType<typeof setInterval> | null = null;
 
   public setApiForTesting(api: DemoApi): void {
     this.api = api;
@@ -25,10 +26,12 @@ export class IntentRuntime {
 
   public async hydrateFromServer(): Promise<void> {
     this.applyServerState(await this.api.getState());
+    this.syncRepairPolling();
   }
 
   public async refreshFromServer(): Promise<void> {
     this.applyServerState(await this.api.getState());
+    this.syncRepairPolling();
   }
 
   public createIntent(intent: Intent): Intent {
@@ -72,6 +75,7 @@ export class IntentRuntime {
     const requestId = `req_${Math.floor(1000 + Math.random() * 9000)}`;
     const result = await this.api.sendInvoice(intent, requestId);
     this.applyServerState(result.state);
+    this.syncRepairPolling();
     const updated = this.intents.get(intentId);
     if (!updated) throw new Error(`Server did not return intent ${intentId}`);
     return { success: result.success, intent: updated, error: result.error };
@@ -81,7 +85,16 @@ export class IntentRuntime {
   public async requestRepair(intentId: string): Promise<RepairJob> {
     const result = await this.api.requestRepair(intentId);
     this.applyServerState(result.state);
+    this.syncRepairPolling();
     return result.repairJob;
+  }
+
+  public async appendIntentContext(intentId: string, text: string, source: 'user' | 'agent' = 'user'): Promise<Intent> {
+    const result = await this.api.appendIntentContext(intentId, text, source);
+    this.applyServerState(result.state);
+    const intent = this.intents.get(intentId);
+    if (!intent) throw new Error(`Server did not return intent ${intentId}`);
+    return intent;
   }
 
   /** Explicit approval boundary; a proposed patch never deploys itself. */
@@ -90,6 +103,7 @@ export class IntentRuntime {
     if (!targetJobId) throw new Error('No proposed repair is available to deploy.');
     const result = await this.api.deployRepair(targetJobId);
     this.applyServerState(result.state);
+    this.syncRepairPolling();
     const intent = result.state.intent;
     if (intent) await onIntentStatusChange(intent);
     return result.state.build;
@@ -128,6 +142,7 @@ export class IntentRuntime {
 
   public async resetDemo(): Promise<void> {
     this.toolLogs = [];
+    this.stopRepairPolling();
     this.applyServerState(await this.api.reset());
     await onIntentStatusChange(null);
   }
@@ -144,6 +159,28 @@ export class IntentRuntime {
     this.intents.clear();
     if (state.intent) this.intents.set(state.intent.id, state.intent);
     this.notify();
+    void onIntentStatusChange(state.intent || null);
+  }
+
+  private syncRepairPolling(): void {
+    const job = this.repairJob;
+    const terminal = !job || ['ready_for_review', 'approved_and_deployed', 'failed'].includes(job.status);
+    if (terminal) {
+      this.stopRepairPolling();
+      return;
+    }
+    if (this.repairPollTimer) return;
+    this.repairPollTimer = setInterval(() => {
+      void this.refreshFromServer().catch((error) => {
+        console.warn('[Heap 4] Repair status refresh failed:', error);
+      });
+    }, 900);
+  }
+
+  private stopRepairPolling(): void {
+    if (!this.repairPollTimer) return;
+    clearInterval(this.repairPollTimer);
+    this.repairPollTimer = null;
   }
 
   private notify() {

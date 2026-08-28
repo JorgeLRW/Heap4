@@ -1,10 +1,12 @@
 import type { Intent } from '../src/client/heap/intentTypes';
 import {
+  appendIntentContextTransition,
   deployRepairTransition,
   requestRepairTransition,
   resumeIntentTransition,
   sendInvoiceTransition,
 } from '../src/shared/demoTransitions';
+import { advanceRepairState } from '../src/shared/repairPipeline';
 import { DemoSessionRepository, type D1DatabaseLike } from './demoSessionRepository';
 
 interface Env {
@@ -56,7 +58,10 @@ export default {
       const sessions = new DemoSessionRepository(env.DB);
 
       if (request.method === 'GET' && url.pathname === '/api/demo/state') {
-        return json(await sessions.get(sessionId));
+        const state = await sessions.get(sessionId);
+        advanceRepairState(state);
+        await sessions.save(state);
+        return json(state);
       }
 
       if (request.method === 'POST' && url.pathname === '/api/demo/reset') {
@@ -82,6 +87,20 @@ export default {
       if (request.method === 'POST' && repairMatch) {
         const state = await sessions.get(sessionId);
         const result = requestRepairTransition(state, decodeURIComponent(repairMatch[1]));
+        await sessions.save(state);
+        return json(result);
+      }
+
+      const contextMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/context$/);
+      if (request.method === 'POST' && contextMatch) {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as { text?: string; source?: 'user' | 'agent' };
+        const result = appendIntentContextTransition(
+          state,
+          decodeURIComponent(contextMatch[1]),
+          String(body.text || ''),
+          body.source === 'agent' ? 'agent' : 'user',
+        );
         await sessions.save(state);
         return json(result);
       }

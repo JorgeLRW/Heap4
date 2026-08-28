@@ -70,6 +70,22 @@ app.post('/api/demo/intents/:intentId/repair', (req, res) => {
   }
 });
 
+app.post('/api/demo/intents/:intentId/context', (req, res) => {
+  try {
+    const source = req.body?.source === 'agent' ? 'agent' : 'user';
+    res.json(
+      demoStore.appendIntentContext(
+        getDemoSessionId(req),
+        req.params.intentId,
+        String(req.body?.text || ''),
+        source,
+      ),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.post('/api/demo/repairs/:jobId/deploy', (req, res) => {
   try {
     res.json(demoStore.deployRepair(getDemoSessionId(req), req.params.jobId));

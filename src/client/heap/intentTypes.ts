@@ -60,6 +60,11 @@ export interface Intent {
   status: IntentStatus;
   detectionSource?: 'SERVER_ERROR' | 'GOAL_VERIFICATION' | 'USER_REPORT';
   runtimeContext: RuntimeContext | null;
+  userContext?: Array<{
+    timestamp: string;
+    text: string;
+    source: 'user' | 'agent';
+  }>;
   history: Array<{ timestamp: string; note: string }>;
 }
 

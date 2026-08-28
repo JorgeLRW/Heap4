@@ -3,11 +3,13 @@ import type { DemoApi, DemoSessionState } from '../src/shared/demoApiTypes';
 import {
   cloneDemoState,
   createInitialDemoState,
+  appendIntentContextTransition,
   deployRepairTransition,
   requestRepairTransition,
   resumeIntentTransition,
   sendInvoiceTransition,
 } from '../src/shared/demoTransitions';
+import { advanceRepairState } from '../src/shared/repairPipeline';
 
 export class DemoStore {
   private sessions = new Map<string, DemoSessionState>();
@@ -16,7 +18,9 @@ export class DemoStore {
     if (!this.sessions.has(sessionId)) {
       this.sessions.set(sessionId, createInitialDemoState(sessionId));
     }
-    return cloneDemoState(this.sessions.get(sessionId)!);
+    const state = this.sessions.get(sessionId)!;
+    advanceRepairState(state);
+    return cloneDemoState(state);
   }
 
   reset(sessionId: string): DemoSessionState {
@@ -31,6 +35,10 @@ export class DemoStore {
 
   requestRepair(sessionId: string, intentId: string) {
     return requestRepairTransition(this.mutableState(sessionId), intentId);
+  }
+
+  appendIntentContext(sessionId: string, intentId: string, text: string, source: 'user' | 'agent' = 'user') {
+    return appendIntentContextTransition(this.mutableState(sessionId), intentId, text, source);
   }
 
   deployRepair(sessionId: string, repairJobId: string) {
@@ -70,6 +78,10 @@ export class InMemoryDemoApi implements DemoApi {
 
   async requestRepair(intentId: string) {
     return this.store.requestRepair(this.sessionId, intentId);
+  }
+
+  async appendIntentContext(intentId: string, text: string, source: 'user' | 'agent' = 'user') {
+    return this.store.appendIntentContext(this.sessionId, intentId, text, source);
   }
 
   async deployRepair(jobId: string) {

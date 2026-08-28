@@ -100,10 +100,45 @@ export function initializeWebMCPTools(): Promise<void> {
     });
 
     await registerModelContextTool({
+      name: 'add_user_context',
+      title: 'Add Context to Interruption',
+      description:
+        'Attach a concise clarification of what the user expected or observed. This updates the interruption capsule only; it cannot edit code or deploy anything.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intentId: { type: 'string', description: 'Interrupted intent identifier.' },
+          text: { type: 'string', description: 'What the user expected or observed, up to 500 characters.' },
+        },
+        required: ['intentId', 'text'],
+      },
+      annotations: { readOnlyHint: false, untrustedContentHint: true },
+      execute: async ({ intentId, text }) => {
+        const startedAt = performance.now();
+        const id = String(intentId);
+        const updated = await intentRuntime.appendIntentContext(id, String(text), 'agent');
+        const result = {
+          intentId: id,
+          accepted: true,
+          context: updated.userContext?.at(-1),
+          message: 'Context attached to the engineering packet.',
+        };
+        intentRuntime.logToolCall(
+          'add_user_context',
+          { intentId: id, text: String(text) },
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false,
+        );
+        return result;
+      },
+    });
+
+    await registerModelContextTool({
       name: 'request_repair',
       title: 'Request Engineering Repair',
       description:
-        'Create a scoped, approval-gated engineering repair artifact for a blocked intent. This proposes a patch and regression test; it never deploys automatically.',
+        'Refresh or explicitly request a scoped engineering repair artifact for a blocked intent. The server normally starts this job automatically when the failure is captured; this never deploys.',
       inputSchema: {
         type: 'object',
         properties: {

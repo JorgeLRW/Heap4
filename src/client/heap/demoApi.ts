@@ -49,6 +49,16 @@ export class HttpDemoApi implements DemoApi {
     );
   }
 
+  appendIntentContext(intentId: string, text: string, source: 'user' | 'agent' = 'user') {
+    return requestJson<{ success: boolean; state: DemoSessionState }>(
+      `/api/demo/intents/${encodeURIComponent(intentId)}/context`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ text, source }),
+      },
+    );
+  }
+
   deployRepair(jobId: string) {
     return requestJson<{ success: boolean; state: DemoSessionState }>(
       `/api/demo/repairs/${encodeURIComponent(jobId)}/deploy`,

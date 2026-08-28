@@ -1,6 +1,7 @@
 import type { Intent } from '../client/heap/intentTypes';
 import { DeliveryProviderConfigurationError, sendInvoiceDelivery } from '../server/services/DeliveryService';
 import type { DemoSessionState, RepairJob } from './demoApiTypes';
+import { appendUserContext, advanceRepairState, createRepairJob } from './repairPipeline';
 
 export const FAILURE_MESSAGE =
   'DELIVERY_PROVIDER_CONFIGURATION_ERROR: Missing TLS cert for outbound gateway mail.acme.example:587';
@@ -86,6 +87,10 @@ export function sendInvoiceTransition(
       note: `HTTP 500 correlated to ${requestId} on ${state.build}. Invoice persisted; delivery did not complete.`,
     });
 
+    // Start the engineering pipeline immediately. WebMCP observes and
+    // collaborates with this job; it is not required to wake the worker.
+    if (!state.repairJob) state.repairJob = createRepairJob(state.intent);
+
     return { success: false, error: FAILURE_MESSAGE, state: cloneDemoState(state) };
   }
 
@@ -102,39 +107,9 @@ export function requestRepairTransition(
     throw new Error(`Intent ${intentId} is not blocked and does not need a repair.`);
   }
 
-  if (!state.repairJob) {
-    state.repairJob = {
-      id: `repair_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`,
-      intentId,
-      status: 'patch_proposed',
-      createdAt: new Date().toISOString(),
-      diagnosis:
-        'The invoice record is committed before delivery. The outbound gateway fails closed in demo-build-a. The safe change repairs only the delivery configuration and preserves the existing invoice.',
-      artifact: {
-        file: 'src/server/services/DeliveryService.ts',
-        summary:
-          'Remove the failing build branch, validate the outbound TLS configuration, and keep delivery idempotent.',
-        patch: [
-          '--- a/src/server/services/DeliveryService.ts',
-          '+++ b/src/server/services/DeliveryService.ts',
-          '@@ sendInvoiceDelivery',
-          '- if (build === \'demo-build-a\') {',
-          '-   throw new DeliveryProviderConfigurationError();',
-          '- }',
-          '+ const gateway = loadOutboundGatewayConfig();',
-          '+ assertValidTlsConfiguration(gateway);',
-          '+ return deliverOnce(invoice, gateway);',
-        ].join('\n'),
-        regressionTest:
-          'Given an already-created INV-2841 and demo-build-b, resuming delivery sends exactly once and invoiceCreateCount remains 1.',
-      },
-      approvalRequired: true,
-    };
-    state.intent!.history.push({
-      timestamp: new Date().toISOString(),
-      note: `Engineering repair ${state.repairJob.id} proposed a scoped patch. Deployment approval is required.`,
-    });
-  }
+  // Failures auto-create the job. This endpoint is retained as a manual
+  // re-open/refresh action for a user who wants to see the engineering packet.
+  if (!state.repairJob) state.repairJob = createRepairJob(state.intent!);
 
   return {
     success: true,
@@ -154,9 +129,30 @@ export function deployRepairTransition(
     throw new Error('The interrupted intent is not in a deployable state.');
   }
 
+  if (state.repairJob.status !== 'ready_for_review') {
+    throw new Error(
+      `Repair ${repairJobId} is still ${state.repairJob.status.replaceAll('_', ' ')}. All validation checks must pass before deployment.`,
+    );
+  }
+
+  if (state.repairJob.artifact.validationChecks.some((check) => check.status !== 'passed')) {
+    throw new Error('The repair artifact is not fully validated.');
+  }
+
   state.build = 'demo-build-b';
   state.repairJob.status = 'approved_and_deployed';
+  state.repairJob.currentStage = 'deployment_verified';
+  state.repairJob.stageProgress = 100;
+  state.repairJob.updatedAt = new Date().toISOString();
   state.repairJob.deployedBuild = state.build;
+  state.repairJob.deploymentEvidence = {
+    environment: 'canary',
+    build: state.build,
+    smokeTest: 'passed',
+    canary: 'passed',
+    rollbackReady: true,
+    verifiedAt: new Date().toISOString(),
+  };
   state.intent.status = 'resumable';
   if (state.intent.runtimeContext) state.intent.runtimeContext.build = state.build;
   state.intent.history.push({
@@ -166,12 +162,39 @@ export function deployRepairTransition(
   return { success: true, state: cloneDemoState(state) };
 }
 
+export function advanceRepairPipelineTransition(
+  state: DemoSessionState,
+): { success: boolean; state: DemoSessionState } {
+  const changed = advanceRepairState(state);
+  if (changed && state.repairJob && state.intent) {
+    state.intent.history.push({
+      timestamp: new Date().toISOString(),
+      note: `Repair pipeline advanced to ${state.repairJob.status.replaceAll('_', ' ')} (${state.repairJob.stageProgress}% validated).`,
+    });
+  }
+  return { success: true, state: cloneDemoState(state) };
+}
+
+export function appendIntentContextTransition(
+  state: DemoSessionState,
+  intentId: string,
+  text: string,
+  source: 'user' | 'agent' = 'user',
+): { success: boolean; state: DemoSessionState } {
+  return { success: true, state: appendUserContext(state, intentId, text, source) };
+}
+
 export function resumeIntentTransition(
   state: DemoSessionState,
   intentId: string,
 ): { success: boolean; state: DemoSessionState } {
   assertIntent(state, intentId);
-  if (state.intent!.status !== 'resumable' || state.build !== 'demo-build-b') {
+  if (
+    state.intent!.status !== 'resumable' ||
+    state.build !== 'demo-build-b' ||
+    state.repairJob?.deploymentEvidence?.smokeTest !== 'passed' ||
+    state.repairJob?.deploymentEvidence?.canary !== 'passed'
+  ) {
     throw new Error(`Intent ${intentId} cannot resume until an approved repair is deployed.`);
   }
   if (!state.invoice) throw new Error('Invariant violation: the original invoice is missing.');

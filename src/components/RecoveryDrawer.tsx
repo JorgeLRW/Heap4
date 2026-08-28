@@ -71,6 +71,7 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   if (!isOpen || !capsule) return null;
 
   const currentIntent = intentRuntime.getIntent(capsule.id) || capsule;
+  const repairJob = intentRuntime.getRepairJob();
   const isBlocked = currentIntent.status === 'blocked';
   const isResumable = currentIntent.status === 'resumable';
   const isCompleted = currentIntent.status === 'completed';
@@ -233,8 +234,10 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                 {isCompleted
                   ? 'Completed ✓ (Original goal verified)'
                   : isResumable
-                  ? 'Resumable (demo-build-b active • resume_intent live on WebMCP)'
-                  : 'Blocked by application defect (demo-build-a)'}
+                  ? 'Resumable (validated candidate live • resume_intent available)'
+                  : repairJob
+                  ? `Blocked · repair pipeline ${repairJob.status.replaceAll('_', ' ')}`
+                  : 'Blocked by application defect'}
               </div>
             </div>
 
@@ -369,8 +372,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               <span className="text-emerald-400 font-bold block">WebMCP Dynamic Tool Surface:</span>
               <p className="text-slate-300 text-[10px] font-sans">
                 {isResumable
-                  ? 'Intent is RESUMABLE. resume_intent() dynamically registered via AbortSignal (6 active tools).'
-                  : 'resume_intent() unregistered while blocked/completed to prevent invalid state transitions.'}
+                  ? 'Intent is RESUMABLE. resume_intent() is dynamically registered only after deployment evidence passes.'
+                  : 'resume_intent() remains unregistered while the repair is blocked or still validating.'}
               </p>
             </div>
 

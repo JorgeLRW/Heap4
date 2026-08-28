@@ -2,18 +2,19 @@
 
 **From runtime failure to verified recovery.**
 
-Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflows. It preserves what a user was trying to accomplish, correlates that intent with a real server failure and relevant source context, creates an approval-gated engineering repair artifact, and exposes the repaired workflow through native WebMCP so a browser agent can finish and verify the original task.
+Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflows. It preserves what a user was trying to accomplish, correlates that intent with a real server failure and relevant source context, automatically starts a bounded repair pipeline, validates the candidate in an explicitly scoped sandbox, and exposes the repaired workflow through native WebMCP so a browser agent can finish and verify the original task.
 
 ## The one vertical slice
 
 1. A user sends invoice `INV-2841` for $4,850.
 2. The server persists exactly one invoice, then executes a reproducible delivery-provider bug and returns HTTP 500.
 3. Heap 4 stores the goal, partial progress, request ID, build, stack, source location, and protected invariants.
-4. A browser agent enters cold and discovers the interrupted workflow through WebMCP.
-5. `request_repair` produces a bounded diagnosis, patch, and regression assertion. It cannot deploy itself.
-6. A human reviews the artifact and approves `demo-build-b`.
-7. The native WebMCP surface dynamically gains `resume_intent`.
-8. The browser agent runs only the missing delivery step and verifies that the original invoice was sent without duplication.
+4. A repair worker automatically creates a job-scoped sandbox plan from the failure capsule.
+5. The pipeline reproduces the failure, produces a bounded patch, runs the affected checks and full build, and waits at `ready_for_review`.
+6. A browser agent enters cold and discovers the interrupted workflow through WebMCP; it can inspect status or attach context while engineering proceeds.
+7. A human reviews the validated artifact and promotes the candidate release.
+8. The native WebMCP surface dynamically gains `resume_intent`.
+9. The browser agent runs only the missing delivery step and verifies that the original invoice was sent without duplication.
 
 The website never edits its own source and the browser agent never receives repository or deployment authority.
 
@@ -37,10 +38,10 @@ The URL receives a `session` query parameter. Keep that parameter when moving th
 3. Close the recovery drawer and navigate to another area.
 4. Ask the browser agent: **“What happened to what I was doing?”**
 5. Confirm fresh `list_active_intents` and `inspect_intent` entries appear in the WebMCP inspector.
-6. Ask it to prepare a repair, or invoke `request_repair` from the inspector.
-7. Open **Engineering Review**, inspect the patch and regression assertion, then approve deployment.
+6. Ask it to explain the interruption or attach context while the repair worker runs.
+7. Open **Engineering Review**, watch the sandbox and validation envelope reach `ready_for_review`, then approve promotion.
 8. Ask: **“Can you finish it now?”**
-9. Confirm `resume_intent` and `verify_intent` execute, the invoice becomes sent, and the active tool count returns from six to five.
+9. Confirm `resume_intent` and `verify_intent` execute, the invoice becomes sent, and the dynamic resume tool is removed after completion.
 
 If the page reports that native WebMCP is unavailable, the normal application still works, but that browser is not a valid acceptance environment. Heap 4 intentionally does not install a JavaScript `modelContext` polyfill.
 
@@ -48,7 +49,8 @@ If the page reports that native WebMCP is unavailable, the normal application st
 
 - `list_active_intents` — discover unfinished human workflows.
 - `inspect_intent` — inspect goal, partial state, invariants, failure, source, and repair context.
-- `request_repair` — create a reviewable, approval-gated patch and regression test.
+- `add_user_context` — attach a concise clarification to the interruption capsule.
+- `request_repair` — refresh or explicitly request the bounded repair job; failures normally start it automatically.
 - `get_repair_status` — observe repair, deployment, and resumability state.
 - `verify_intent` — verify the original outcome and no-duplicate invariant from server state.
 - `resume_intent` — dynamically available only while an approved repair makes the intent resumable.

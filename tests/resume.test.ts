@@ -32,12 +32,16 @@ async function runResumeTests() {
   assert(rejectedWhileBlocked, 'Server rejects resume while the defect is blocked');
 
   const repair = await intentRuntime.requestRepair('int_2841');
-  assert(repair.status === 'patch_proposed', 'Engineering worker proposes a reviewable patch');
+  for (let index = 0; index < 5 && repair.status !== 'ready_for_review'; index++) {
+    await intentRuntime.refreshFromServer();
+  }
+  const readyRepair = intentRuntime.getRepairJob()!;
+  assert(readyRepair.status === 'ready_for_review', 'Engineering worker reaches a validated review boundary');
   assert(repair.approvalRequired === true, 'Repair cannot self-deploy');
   assert(repair.artifact.patch.includes('deliverOnce'), 'Repair contains a concrete scoped patch');
   assert(repair.artifact.regressionTest.includes('invoiceCreateCount remains 1'), 'Repair contains an invariant regression test');
 
-  const build = await intentRuntime.deployRepair(repair.id);
+  const build = await intentRuntime.deployRepair(readyRepair.id);
   assert(build === 'demo-build-b', 'Explicit approval deploys demo-build-b');
   assert(intentRuntime.getIntent('int_2841')?.status === 'resumable', 'Blocked intent becomes RESUMABLE');
 
