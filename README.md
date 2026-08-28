@@ -7,7 +7,7 @@ Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflo
 ## The one vertical slice
 
 1. A user sends invoice `INV-2841` for $4,850.
-2. The server persists exactly one invoice, then returns a controlled HTTP 500 while attempting delivery.
+2. The server persists exactly one invoice, then executes a reproducible delivery-provider bug and returns HTTP 500.
 3. Heap 4 stores the goal, partial progress, request ID, build, stack, source location, and protected invariants.
 4. A browser agent enters cold and discovers the interrupted workflow through WebMCP.
 5. `request_repair` produces a bounded diagnosis, patch, and regression assertion. It cannot deploy itself.
@@ -16,6 +16,8 @@ Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflo
 8. The browser agent runs only the missing delivery step and verifies that the original invoice was sent without duplication.
 
 The website never edits its own source and the browser agent never receives repository or deployment authority.
+
+See [WEBMCP_PIPELINE.md](WEBMCP_PIPELINE.md) for the exact browser-agent contract, authority boundaries, and acceptance checklist.
 
 ## Run locally
 
@@ -77,8 +79,8 @@ npm test
 npm run build
 ```
 
-The suite proves the HTTP 500 capsule, server persistence, blocked-state guard, review requirement, dynamic tool lifecycle, invariant-safe resume, and server-authoritative goal verification.
+The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, review requirement, dynamic tool lifecycle, invariant-safe resume, and server-authoritative goal verification.
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](LICENSE).

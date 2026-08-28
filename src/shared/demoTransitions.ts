@@ -1,4 +1,5 @@
 import type { Intent } from '../client/heap/intentTypes';
+import { DeliveryProviderConfigurationError, sendInvoiceDelivery } from '../server/services/DeliveryService';
 import type { DemoSessionState, RepairJob } from './demoApiTypes';
 
 export const FAILURE_MESSAGE =
@@ -45,7 +46,18 @@ export function sendInvoiceTransition(
     'Persisted invoice in the server store',
   ];
 
-  if (state.build === 'demo-build-a') {
+  try {
+    sendInvoiceDelivery(
+      {
+        id: state.invoice.id,
+        recipient: state.invoice.recipient,
+        amount: state.invoice.amount,
+      },
+      state.build,
+    );
+  } catch (error) {
+    if (!(error instanceof DeliveryProviderConfigurationError)) throw error;
+
     state.intent.progress.deliveryCompleted = false;
     state.intent.progress.failedStep = 'DeliveryService.sendInvoiceDelivery';
     state.intent.progress.gap = 'Delivery is blocked by the outbound gateway configuration defect.';
@@ -61,10 +73,10 @@ export function sendInvoiceTransition(
       source: {
         file: 'src/server/services/DeliveryService.ts',
         line: 42,
-        symbol: 'DeliveryService.sendInvoiceDelivery',
-        linesRange: '39-47',
+        symbol: 'sendInvoiceDelivery',
+        linesRange: '37-46',
         snippet:
-          "if (demoFailureEnabled) { throw new Error('DELIVERY_PROVIDER_CONFIGURATION_ERROR'); }",
+          "if (build === 'demo-build-a') { throw new DeliveryProviderConfigurationError(); }",
       },
       build: state.build,
       timestamp: new Date().toISOString(),
@@ -101,13 +113,13 @@ export function requestRepairTransition(
       artifact: {
         file: 'src/server/services/DeliveryService.ts',
         summary:
-          'Load the outbound TLS configuration from the repaired deployment and keep delivery idempotent.',
+          'Remove the failing build branch, validate the outbound TLS configuration, and keep delivery idempotent.',
         patch: [
           '--- a/src/server/services/DeliveryService.ts',
           '+++ b/src/server/services/DeliveryService.ts',
           '@@ sendInvoiceDelivery',
-          '- if (this.demoFailureEnabled) {',
-          '-   throw new Error("DELIVERY_PROVIDER_CONFIGURATION_ERROR");',
+          '- if (build === \'demo-build-a\') {',
+          '-   throw new DeliveryProviderConfigurationError();',
           '- }',
           '+ const gateway = loadOutboundGatewayConfig();',
           '+ assertValidTlsConfiguration(gateway);',
@@ -167,6 +179,14 @@ export function resumeIntentTransition(
     throw new Error('Invariant violation: duplicate invoice records were detected.');
   }
 
+  sendInvoiceDelivery(
+    {
+      id: state.invoice.id,
+      recipient: state.invoice.recipient,
+      amount: state.invoice.amount,
+    },
+    state.build,
+  );
   finishDelivery(state);
   return { success: true, state: cloneDemoState(state) };
 }
