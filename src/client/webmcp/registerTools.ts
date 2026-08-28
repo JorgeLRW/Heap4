@@ -1,0 +1,283 @@
+/**
+ * Authoritative Heap 4 WebMCP registrations.
+ *
+ * These definitions are forwarded to the browser's native
+ * `document.modelContext.registerTool(...)` implementation. No production
+ * polyfill or simulated discovery path exists.
+ */
+
+import {
+  getModelContext,
+  registerModelContextTool,
+} from '../../webmcp/modelContext';
+import { intentRuntime } from '../heap/intentRuntime';
+import type { Intent } from '../heap/intentTypes';
+
+let baseRegistrationPromise: Promise<void> | null = null;
+let resumeAbortController: AbortController | null = null;
+
+async function refreshAndGetIntent(intentId: string) {
+  await intentRuntime.refreshFromServer();
+  return intentRuntime.getIntent(intentId);
+}
+
+export function initializeWebMCPTools(): Promise<void> {
+  if (baseRegistrationPromise) return baseRegistrationPromise;
+
+  baseRegistrationPromise = (async () => {
+    // Fail honestly when the browser does not implement WebMCP.
+    if (!getModelContext()) throw new Error('Native document.modelContext is unavailable.');
+
+    await registerModelContextTool({
+      name: 'list_active_intents',
+      title: 'List Interrupted Workflows',
+      description:
+        'Discover unfinished human workflows remembered by this application. Use first when the user asks what happened or wants to continue earlier work.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => {
+        const startedAt = performance.now();
+        await intentRuntime.refreshFromServer();
+        const intents = intentRuntime.getActiveIntents().map((intent) => ({
+          intentId: intent.id,
+          goal: intent.goal.description,
+          status: intent.status,
+          completedSteps: intent.progress.completedSteps,
+          unfinishedStep: intent.progress.failedStep || intent.progress.gap,
+          invariants: intent.invariants,
+        }));
+        const result = { intents, count: intents.length };
+        intentRuntime.logToolCall(
+          'list_active_intents',
+          {},
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          true
+        );
+        return result;
+      },
+    });
+
+    await registerModelContextTool({
+      name: 'inspect_intent',
+      title: 'Inspect Interrupted Workflow',
+      description:
+        'Inspect an unfinished workflow, including the user goal, partial state, protected invariants, correlated HTTP failure, build, source location, and repair status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intentId: { type: 'string', description: 'Intent identifier returned by list_active_intents.' },
+        },
+        required: ['intentId'],
+      },
+      annotations: { readOnlyHint: true, untrustedContentHint: true },
+      execute: async ({ intentId }) => {
+        const startedAt = performance.now();
+        const id = String(intentId);
+        const intent = await refreshAndGetIntent(id);
+        const result = intent
+          ? {
+              intentId: intent.id,
+              actor: intent.actor,
+              goal: intent.goal,
+              entities: intent.entities,
+              progress: intent.progress,
+              invariants: intent.invariants,
+              status: intent.status,
+              failure: intent.runtimeContext,
+              repair: intentRuntime.getRepairJob(),
+            }
+          : { error: `Intent ${id} was not found.` };
+        intentRuntime.logToolCall(
+          'inspect_intent',
+          { intentId: id },
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          true
+        );
+        return result;
+      },
+    });
+
+    await registerModelContextTool({
+      name: 'request_repair',
+      title: 'Request Engineering Repair',
+      description:
+        'Create a scoped, approval-gated engineering repair artifact for a blocked intent. This proposes a patch and regression test; it never deploys automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intentId: { type: 'string', description: 'Blocked intent to package for engineering.' },
+        },
+        required: ['intentId'],
+      },
+      annotations: { readOnlyHint: false, untrustedContentHint: true },
+      execute: async ({ intentId }) => {
+        const startedAt = performance.now();
+        const id = String(intentId);
+        await intentRuntime.refreshFromServer();
+        const repairJob = await intentRuntime.requestRepair(id);
+        const result = {
+          repairJob,
+          message: 'A reviewable patch was proposed. Explicit deployment approval is still required.',
+        };
+        intentRuntime.logToolCall(
+          'request_repair',
+          { intentId: id },
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false
+        );
+        return result;
+      },
+    });
+
+    await registerModelContextTool({
+      name: 'get_repair_status',
+      title: 'Get Repair Status',
+      description:
+        'Check whether engineering has proposed and deployed a repair for an interrupted workflow, and whether the workflow is now resumable.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intentId: { type: 'string', description: 'Intent whose repair status should be checked.' },
+        },
+        required: ['intentId'],
+      },
+      annotations: { readOnlyHint: true },
+      execute: async ({ intentId }) => {
+        const startedAt = performance.now();
+        const id = String(intentId);
+        const intent = await refreshAndGetIntent(id);
+        const result = {
+          intentId: id,
+          intentStatus: intent?.status || 'not_found',
+          build: intentRuntime.getCurrentBuild(),
+          repairJob: intentRuntime.getRepairJob(),
+          resumable: intent?.status === 'resumable',
+        };
+        intentRuntime.logToolCall(
+          'get_repair_status',
+          { intentId: id },
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          true
+        );
+        return result;
+      },
+    });
+
+    await registerModelContextTool({
+      name: 'verify_intent',
+      title: 'Verify Original Goal',
+      description:
+        'Verify from server-authoritative state whether the original human goal succeeded and its no-duplicate invariant remained intact.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          intentId: { type: 'string', description: 'Intent to verify.' },
+        },
+        required: ['intentId'],
+      },
+      annotations: { readOnlyHint: true },
+      execute: async ({ intentId }) => {
+        const startedAt = performance.now();
+        const id = String(intentId);
+        const intent = await refreshAndGetIntent(id);
+        const goalSatisfied = Boolean(
+          intent?.status === 'completed' && intent.progress.deliveryCompleted
+        );
+        const result = {
+          intentId: id,
+          goalSatisfied,
+          successCondition: intent?.goal.successCondition,
+          invoiceCreateCount: intentRuntime.getInvoiceCreateCount(),
+          invariantsPreserved: intentRuntime.getInvoiceCreateCount() === 1,
+        };
+        intentRuntime.logToolCall(
+          'verify_intent',
+          { intentId: id },
+          result,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          true
+        );
+        return result;
+      },
+    });
+
+    const activeIntent = intentRuntime.getActiveIntents()[0];
+    await onIntentStatusChange(activeIntent || null);
+  })().catch((error) => {
+    baseRegistrationPromise = null;
+    throw error;
+  });
+
+  return baseRegistrationPromise;
+}
+
+/** Keep the mutating resume capability absent until the repaired build is live. */
+export async function onIntentStatusChange(intent: Intent | null): Promise<void> {
+  if (intent?.status !== 'resumable') {
+    if (resumeAbortController) {
+      resumeAbortController.abort();
+      resumeAbortController = null;
+    }
+    return;
+  }
+
+  if (resumeAbortController || !getModelContext()) return;
+  const controller = new AbortController();
+  resumeAbortController = controller;
+
+  try {
+    await registerModelContextTool(
+      {
+        name: 'resume_intent',
+        title: 'Resume Repaired Workflow',
+        description:
+          'Resume only the unfinished delivery step after an approved repair is deployed. The server rejects blocked intents and duplicate invoice creation.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            intentId: { type: 'string', description: 'Resumable intent identifier.' },
+          },
+          required: ['intentId'],
+        },
+        annotations: { readOnlyHint: false },
+        execute: async ({ intentId }) => {
+          const startedAt = performance.now();
+          const id = String(intentId);
+          await intentRuntime.refreshFromServer();
+          const result = await intentRuntime.resumeIntent(id);
+          intentRuntime.logToolCall(
+            'resume_intent',
+            { intentId: id },
+            result,
+            Math.max(1, Math.round(performance.now() - startedAt)),
+            false
+          );
+          const response = {
+            success: result.success,
+            intentId: id,
+            status: result.intent.status,
+            completedOnlyMissingStep: true,
+          };
+          // Let the invocation result reach the browser agent before the tool's
+          // AbortSignal removes resume_intent from the dynamic surface.
+          setTimeout(() => void onIntentStatusChange(result.intent), 0);
+          return response;
+        },
+      },
+      { signal: controller.signal }
+    );
+  } catch (error) {
+    if (resumeAbortController === controller) resumeAbortController = null;
+    throw error;
+  }
+}
+
+export function resetWebMCPRegistrationForTests(): void {
+  baseRegistrationPromise = null;
+  if (resumeAbortController) resumeAbortController.abort();
+  resumeAbortController = null;
+}
