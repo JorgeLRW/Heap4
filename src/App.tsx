@@ -86,7 +86,7 @@ export const App: React.FC = () => {
       />
 
       {webMcpAvailable === false && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-xl w-[calc(100%-2rem)] rounded-xl border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-xs text-amber-100 shadow-2xl">
+        <div className="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-xl w-[calc(100%-2rem)] rounded-xl border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-xs text-amber-100 shadow-2xl">
           Native WebMCP is not available in this browser. The application remains usable, but agent discovery is disabled—enable the Chrome WebMCP testing flag or open the live page in ChatGPT’s in-app browser.
         </div>
       )}
