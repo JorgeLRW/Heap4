@@ -67,6 +67,32 @@ Heap 4 does not install a fake production `modelContext`. If the browser has no
 native WebMCP support, the application still works as a normal site and clearly
 reports that agent discovery is unavailable.
 
+## The data boundary
+
+WebMCP is chosen here for a structural reason, not a cosmetic one: the tool
+callback runs in the page's own authenticated context, so the user's data is
+never copied out of the origin to reach the agent.
+
+- The page reads the invoice, failure capsule, and source context with the
+  session the user already has.
+- The agent receives only the structured result the site chose to return for
+  that specific tool call.
+- No agent vendor holds credentials for this application, and no third-party
+  server retains a copy of the workflow state.
+- Nothing is persisted for training. Session state lives in the demo session
+  record and is discarded on reset.
+
+Two things follow. First, each tool result is an explicit disclosure decision:
+`inspect_intent` returns the grant's metadata but never its `tokenHash`, and
+`deliver_by_alternate_route` strips the plaintext URL from the audit log.
+Second, the dynamic surface *is* the privacy boundary — because a tool is
+registered only while the server would authorize it, the set of things the agent
+can do is the same as the set of things the user is entitled to.
+
+An agent that drove the DOM instead would be limited to what happens to be
+rendered, and a server-side connector would need its own credentials, its own
+copy of the data, and its own authorization model.
+
 ## The dynamic capability surface
 
 `onIntentStatusChange` is the only place dynamic registration happens, and it is

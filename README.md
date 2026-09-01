@@ -75,6 +75,18 @@ Not a decorative URL. The alternate route mints a bearer token that is:
 - **never stored in plaintext** — only its SHA-256 digest is persisted; the URL is returned once, at issue time, and is excluded from the tool audit log.
 - **session-free** — the recipient is not the authenticated user, so authority comes from the token's scope rather than a session. This is why `GET /api/demo/invoice-access/:token` is deliberately unauthenticated.
 
+## Why WebMCP and not a scraper or a server connector
+
+The data never leaves the origin. WebMCP invokes the tool callback *inside the page's own authenticated context*, so the invoice, the customer, the stack trace, and the source location are read by the page and returned as structured results. There is no third-party server holding a copy, no credential handed to an agent vendor, and no scraped DOM snapshot of the user's account.
+
+That has three consequences worth stating plainly:
+
+- **A DOM-driving agent cannot do this.** It would have to see the rendered page to act on it, and it would still only know what is on screen — not the outcome, the invariants, or which routes remain open.
+- **A server-side MCP connector cannot do this cheaply.** It needs its own credentials, its own copy of the data, and its own authorization model. Here the browser already has the user's session, and the site already knows what the user is allowed to do.
+- **Nothing is retained for training.** State stays in the user's session record and is discarded on reset. The site chooses what to expose per tool call; the plaintext share URL, for example, is returned once and excluded from the audit log.
+
+The tool surface is also the privacy boundary. Because tools are registered only while the server would authorize them, "what the agent can see" and "what the user is entitled to" are the same list.
+
 ## Authority boundaries
 
 ```text
