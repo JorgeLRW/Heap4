@@ -50,6 +50,43 @@ export interface ValidationCheck {
   detail: string;
 }
 
+export type RepairExecutionMode = 'pending' | 'cloudflare_vm' | 'local_bounded_process';
+
+export interface RepairCommandEvidence {
+  id: string;
+  label: string;
+  argv: string[];
+  cwd: string;
+  startedAt: string;
+  completedAt: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  truncated: boolean;
+  digest: string;
+}
+
+export interface RepairAgentEvent {
+  stage: 'observed' | 'diagnosed' | 'proposed' | 'mutated' | 'verified';
+  message: string;
+  timestamp: string;
+  evidenceId?: string;
+}
+
+export interface SandboxExecutionEvidence {
+  mode: RepairExecutionMode;
+  lifecycle: 'pending' | 'provisioning' | 'running' | 'destroyed' | 'cleanup_failed';
+  startedAt?: string;
+  completedAt?: string;
+  baseDigest?: string;
+  candidateDigest?: string;
+  workspaceDigest?: string;
+  attemptedWrites: string[];
+  commands: RepairCommandEvidence[];
+  cleanupDetail?: string;
+}
+
 export interface SandboxPlan {
   id: string;
   instanceClass: 'lite' | 'standard';
@@ -60,6 +97,7 @@ export interface SandboxPlan {
   networkPolicy: 'deny_by_default';
   credentialPolicy: 'brokered_no_secrets_in_workspace';
   cleanup: 'destroy_after_artifact_capture';
+  execution: SandboxExecutionEvidence;
 }
 
 export interface DeploymentEvidence {
@@ -84,6 +122,11 @@ export interface RepairJob {
   diagnosis: string;
   artifact: RepairArtifact;
   sandbox: SandboxPlan;
+  agent: {
+    mode: 'bounded_policy';
+    strategy: 'delivery_tls_adapter_v1';
+    events: RepairAgentEvent[];
+  };
   approvalRequired: true;
   deployedBuild?: DemoBuild;
   deploymentEvidence?: DeploymentEvidence;

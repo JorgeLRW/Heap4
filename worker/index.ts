@@ -1,3 +1,4 @@
+import { proxyToSandbox } from '@cloudflare/sandbox';
 import type { Intent } from '../src/client/heap/intentTypes';
 import {
   appendIntentContextTransition,
@@ -6,12 +7,12 @@ import {
   resumeIntentTransition,
   sendInvoiceTransition,
 } from '../src/shared/demoTransitions';
-import { advanceRepairState } from '../src/shared/repairPipeline';
-import { DemoSessionRepository, type D1DatabaseLike } from './demoSessionRepository';
+import { executeRepairPipeline } from '../src/shared/repairSandboxExecution';
+import { CloudflareRepairSandbox } from './cloudflareRepairSandbox';
+import { DemoSessionRepository } from './demoSessionRepository';
 
-interface Env {
-  DB: D1DatabaseLike;
-}
+export { ContainerProxy } from '@cloudflare/sandbox';
+export { RepairSandbox } from './repairSandboxClass';
 
 const SESSION_HEADER = 'X-Heap-Session-ID';
 const MAX_BODY_BYTES = 256 * 1024;
@@ -41,8 +42,53 @@ async function readIntent(request: Request): Promise<Intent> {
   return body.intent;
 }
 
+async function runRepairInSandbox(
+  sessionId: string,
+  repairJobId: string,
+  env: Env,
+): Promise<void> {
+  const sessions = new DemoSessionRepository(env.DB);
+  const state = await sessions.get(sessionId);
+  if (!state.repairJob || state.repairJob.id !== repairJobId) return;
+  if (['ready_for_review', 'approved_and_deployed', 'failed'].includes(state.repairJob.status)) return;
+
+  await executeRepairPipeline(
+    state.repairJob,
+    new CloudflareRepairSandbox(env.Sandbox, state.repairJob.sandbox.id),
+    async (checkpoint) => {
+      const latest = await sessions.get(sessionId);
+      if (latest.repairJob?.id !== checkpoint.id) return;
+      latest.repairJob = checkpoint;
+      await sessions.save(latest);
+    },
+  );
+}
+
+function scheduleRepair(
+  ctx: ExecutionContext,
+  sessionId: string,
+  repairJobId: string,
+  env: Env,
+): void {
+  ctx.waitUntil(
+    runRepairInSandbox(sessionId, repairJobId, env).catch((error) => {
+      console.error(
+        JSON.stringify({
+          message: 'cloudflare repair execution failed',
+          sessionId,
+          repairJobId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }),
+  );
+}
+
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
+    const proxyResponse = await proxyToSandbox(request, env);
+    if (proxyResponse) return proxyResponse;
+
     const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
@@ -59,8 +105,6 @@ export default {
 
       if (request.method === 'GET' && url.pathname === '/api/demo/state') {
         const state = await sessions.get(sessionId);
-        advanceRepairState(state);
-        await sessions.save(state);
         return json(state);
       }
 
@@ -80,6 +124,9 @@ export default {
         const state = await sessions.get(sessionId);
         const result = sendInvoiceTransition(state, await readIntent(request), requestId);
         await sessions.save(state);
+        if (!result.success && state.repairJob) {
+          scheduleRepair(ctx, sessionId, state.repairJob.id, env);
+        }
         return json(result, result.success ? 200 : 500);
       }
 
@@ -88,6 +135,7 @@ export default {
         const state = await sessions.get(sessionId);
         const result = requestRepairTransition(state, decodeURIComponent(repairMatch[1]));
         await sessions.save(state);
+        scheduleRepair(ctx, sessionId, result.repairJob.id, env);
         return json(result);
       }
 
@@ -127,4 +175,4 @@ export default {
       return json({ success: false, error: message }, 400);
     }
   },
-} satisfies { fetch(request: Request, env: Env): Promise<Response> };
+} satisfies ExportedHandler<Env>;

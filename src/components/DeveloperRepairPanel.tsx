@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, CircleDashed, Cpu, FileCode2, FlaskConical, ShieldCheck, Wrench, X } from 'lucide-react';
+import { CheckCircle2, CircleDashed, Cpu, FileCode2, FlaskConical, ShieldCheck, Terminal, Wrench, X } from 'lucide-react';
 import { intentRuntime } from '../client/heap/intentRuntime';
 import type { RepairJob } from '../shared/demoApiTypes';
 
@@ -35,6 +35,7 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
   const checks = useMemo(() => repairJob?.artifact.validationChecks || [], [repairJob]);
   const isReady = repairJob?.status === 'ready_for_review';
   const isDeployed = repairJob?.status === 'approved_and_deployed';
+  const execution = repairJob?.sandbox.execution;
 
   if (!isOpen) return null;
 
@@ -86,7 +87,13 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
           </div>
           <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
             <span className="text-slate-500 block mb-1">Workspace</span>
-            <span className="font-mono text-emerald-300">ephemeral · no secrets</span>
+            <span className="font-mono text-emerald-300">
+              {execution?.mode === 'cloudflare_vm'
+                ? 'isolated VM'
+                : execution?.mode === 'local_bounded_process'
+                  ? 'bounded local process'
+                  : 'awaiting executor'}
+            </span>
           </div>
         </div>
 
@@ -141,7 +148,14 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
                 <div className="text-slate-500">{repairJob.sandbox.instanceClass} · {repairJob.sandbox.sourceRevision}</div>
                 <div className="font-mono text-slate-400 break-all">{repairJob.sandbox.workspace}</div>
                 <div className="text-slate-400">{repairJob.sandbox.fileScope.length} writable files · {repairJob.sandbox.validationScope.length} validation targets</div>
-                <div className="text-emerald-400">Network denied by default · credentials brokered</div>
+                <div className="text-emerald-400">
+                  {execution?.mode === 'cloudflare_vm'
+                    ? 'Public internet disabled · no credentials in VM'
+                    : 'Fixed argv only · reduced environment · no inherited secrets'}
+                </div>
+                <div className="text-slate-500">
+                  Lifecycle: {execution?.lifecycle.replaceAll('_', ' ') || 'pending'}
+                </div>
               </div>
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">
                 <div className="flex items-center gap-2 text-slate-300 font-semibold"><ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Change boundary</div>
@@ -164,6 +178,54 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Agent decisions</div>
+                {(repairJob.agent.events || []).map((event, index) => (
+                  <div key={`${event.timestamp}-${index}`} className="border-l border-indigo-500/40 pl-3 py-1">
+                    <div className="text-[10px] uppercase tracking-wider text-indigo-300">{event.stage}</div>
+                    <div className="text-[11px] text-slate-300 mt-0.5">{event.message}</div>
+                    {event.evidenceId && (
+                      <div className="font-mono text-[9px] text-slate-600 mt-1">evidence {event.evidenceId.slice(0, 16)}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Executable evidence</div>
+                {!execution?.commands.length && (
+                  <div className="text-[11px] text-slate-500">Waiting for the sandbox to emit command results.</div>
+                )}
+                {execution?.commands.map((command) => (
+                  <details key={command.digest} className="group rounded-lg border border-slate-800 bg-slate-900/60">
+                    <summary className="cursor-pointer list-none p-2 flex items-center gap-2 text-[11px]">
+                      <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span className="text-slate-300 flex-1">{command.label}</span>
+                      <span className={command.exitCode === 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                        exit {command.exitCode}
+                      </span>
+                    </summary>
+                    <div className="border-t border-slate-800 p-2 space-y-2">
+                      <div className="font-mono text-[9px] text-slate-500 break-all">$ {command.argv.join(' ')}</div>
+                      {command.stdout && (
+                        <pre className="text-[9px] text-emerald-300 whitespace-pre-wrap break-words">{command.stdout}</pre>
+                      )}
+                      {command.stderr && (
+                        <pre className="text-[9px] text-rose-300 whitespace-pre-wrap break-words">{command.stderr}</pre>
+                      )}
+                      <div className="font-mono text-[9px] text-slate-600">sha256 {command.digest}</div>
+                    </div>
+                  </details>
+                ))}
+                {execution?.attemptedWrites.length ? (
+                  <div className="text-[10px] text-slate-500">
+                    Agent write set: <span className="font-mono text-slate-300">{execution.attemptedWrites.join(', ')}</span>
+                  </div>
+                ) : null}
               </div>
             </div>
 

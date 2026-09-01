@@ -1,7 +1,7 @@
 import type { Intent } from '../client/heap/intentTypes';
 import { DeliveryProviderConfigurationError, sendInvoiceDelivery } from '../server/services/DeliveryService';
 import type { DemoSessionState, RepairJob } from './demoApiTypes';
-import { appendUserContext, advanceRepairState, createRepairJob } from './repairPipeline';
+import { appendUserContext, createRepairJob } from './repairPipeline';
 
 export const FAILURE_MESSAGE =
   'DELIVERY_PROVIDER_CONFIGURATION_ERROR: Missing TLS cert for outbound gateway mail.acme.example:587';
@@ -159,19 +159,6 @@ export function deployRepairTransition(
     timestamp: new Date().toISOString(),
     note: `${repairJobId} approved and deployed as ${state.build}. Intent is now resumable.`,
   });
-  return { success: true, state: cloneDemoState(state) };
-}
-
-export function advanceRepairPipelineTransition(
-  state: DemoSessionState,
-): { success: boolean; state: DemoSessionState } {
-  const changed = advanceRepairState(state);
-  if (changed && state.repairJob && state.intent) {
-    state.intent.history.push({
-      timestamp: new Date().toISOString(),
-      note: `Repair pipeline advanced to ${state.repairJob.status.replaceAll('_', ' ')} (${state.repairJob.stageProgress}% validated).`,
-    });
-  }
   return { success: true, state: cloneDemoState(state) };
 }
 

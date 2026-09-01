@@ -10,7 +10,7 @@ Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflo
 2. The server persists exactly one invoice, then executes a reproducible delivery-provider bug and returns HTTP 500.
 3. Heap 4 stores the goal, partial progress, request ID, build, stack, source location, and protected invariants.
 4. A repair worker automatically creates a job-scoped sandbox plan from the failure capsule.
-5. The pipeline reproduces the failure, produces a bounded patch, runs the affected checks and full build, and waits at `ready_for_review`.
+5. The pipeline reproduces the failure, produces a bounded patch, runs the affected checks, candidate parse, and write-scope audit, and waits at `ready_for_review`.
 6. A browser agent enters cold and discovers the interrupted workflow through WebMCP; it can inspect status or attach context while engineering proceeds.
 7. A human reviews the validated artifact and promotes the candidate release.
 8. The native WebMCP surface dynamically gains `resume_intent`.
@@ -39,7 +39,7 @@ The URL receives a `session` query parameter. Keep that parameter when moving th
 4. Ask the browser agent: **“What happened to what I was doing?”**
 5. Confirm fresh `list_active_intents` and `inspect_intent` entries appear in the WebMCP inspector.
 6. Ask it to explain the interruption or attach context while the repair worker runs.
-7. Open **Engineering Review**, watch the sandbox and validation envelope reach `ready_for_review`, then approve promotion.
+7. Open **Engineering Review**, watch the sandbox command evidence and validation envelope reach `ready_for_review`, then approve promotion.
 8. Ask: **“Can you finish it now?”**
 9. Confirm `resume_intent` and `verify_intent` execute, the invoice becomes sent, and the dynamic resume tool is removed after completion.
 
@@ -81,7 +81,7 @@ npm test
 npm run build
 ```
 
-The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, review requirement, dynamic tool lifecycle, invariant-safe resume, and server-authoritative goal verification.
+The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, real local command execution, SHA-256 evidence, write-scope enforcement, cleanup, review requirement, dynamic tool lifecycle, invariant-safe resume, and server-authoritative goal verification.
 
 ## License
 

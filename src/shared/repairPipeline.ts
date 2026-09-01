@@ -36,9 +36,9 @@ function checks(status: ValidationCheck['status'] = 'pending'): ValidationCheck[
     },
     {
       id: 'build',
-      label: 'Full application build',
+      label: 'Bounded repair package build',
       status,
-      detail: 'TypeScript compilation and the production bundle complete successfully.',
+      detail: 'The candidate parses successfully and the workspace scope audit detects no out-of-policy writes.',
     },
   ];
 }
@@ -89,6 +89,12 @@ function sandboxPlan(sourceRevision: 'demo-build-a' | 'demo-build-b'): SandboxPl
     networkPolicy: 'deny_by_default',
     credentialPolicy: 'brokered_no_secrets_in_workspace',
     cleanup: 'destroy_after_artifact_capture',
+    execution: {
+      mode: 'pending',
+      lifecycle: 'pending',
+      attemptedWrites: [],
+      commands: [],
+    },
   };
 }
 
@@ -108,75 +114,19 @@ export function createRepairJob(intent: Intent, now = new Date()): RepairJob {
       'The invoice is already persisted. The novel failure is isolated to the outbound delivery adapter, so the repair is constrained to that adapter and its regression test.',
     artifact: artifact('demo-build-a'),
     sandbox: sandboxPlan('demo-build-a'),
+    agent: {
+      mode: 'bounded_policy',
+      strategy: 'delivery_tls_adapter_v1',
+      events: [
+        {
+          stage: 'observed',
+          message: 'Correlated the HTTP 500 with the persisted invoice and failing delivery adapter.',
+          timestamp: createdAt,
+        },
+      ],
+    },
     approvalRequired: true,
   };
-}
-
-/**
- * Progresses one deterministic pipeline stage. The real implementation can
- * replace this function with a queue-backed Sandbox worker without changing
- * the browser or delivery contracts.
- */
-export function advanceRepairPipeline(job: RepairJob, now = new Date()): RepairJob {
-  if (
-    job.status === 'ready_for_review' ||
-    job.status === 'approved_and_deployed' ||
-    job.status === 'failed'
-  ) {
-    return job;
-  }
-
-  const next = structuredClone(job);
-  const updatedAt = now.toISOString();
-
-  switch (job.status) {
-    case 'queued':
-      next.status = 'diagnosing';
-      next.currentStage = 'sandbox_created';
-      next.stageProgress = 18;
-      next.artifact.validationChecks = checks('pending');
-      break;
-    case 'diagnosing':
-      next.status = 'reproducing';
-      next.currentStage = 'reproduction_confirmed';
-      next.stageProgress = 36;
-      next.artifact.validationChecks = checks('passed').map((check, index) =>
-        index === 0 ? check : { ...check, status: 'pending' },
-      );
-      break;
-    case 'reproducing':
-      next.status = 'patching';
-      next.currentStage = 'patch_generated';
-      next.stageProgress = 56;
-      next.artifact.validationChecks = checks('passed').map((check, index) =>
-        index < 2 ? check : { ...check, status: 'pending' },
-      );
-      break;
-    case 'patching':
-      next.status = 'validating';
-      next.currentStage = 'patch_generated';
-      next.stageProgress = 74;
-      next.artifact.validationChecks = checks('running').map((check, index) =>
-        index < 2 ? { ...check, status: 'passed' } : check,
-      );
-      break;
-    case 'validating':
-      next.status = 'ready_for_review';
-      next.currentStage = 'validation_complete';
-      next.stageProgress = 100;
-      next.artifact.validationChecks = checks('passed');
-      break;
-  }
-
-  next.updatedAt = updatedAt;
-  return next;
-}
-
-export function advanceRepairState(state: DemoSessionState, now = new Date()): boolean {
-  if (!state.repairJob) return false;
-  const before = state.repairJob.status;
-  state.repairJob = advanceRepairPipeline(state.repairJob, now);
-  return before !== state.repairJob.status;
 }
 
 export function appendUserContext(

@@ -58,18 +58,35 @@ Every repair job declares:
 
 - The exact source revision that failed.
 - The small writable file scope for the permitted repair class.
-- The larger validation scope for affected consumers and the complete build.
+- The larger validation scope for affected consumers, candidate parsing, and the write-scope audit.
 - A job-scoped ephemeral workspace.
-- Deny-by-default network access and brokered credentials.
+- Deny-by-default network access in the Cloudflare VM; fixed no-network commands and no inherited credentials locally.
 - Cleanup after artifact capture.
 
-The deterministic challenge implementation advances through these stages:
+The executor runs the same stages against a real, job-scoped workspace:
 
 `queued → diagnosing → reproducing → patching → validating → ready_for_review`
 
 The artifact is not reviewable until the original failure reproduces against the
-base revision, the regression assertion passes against the candidate, affected
-workflow checks pass, and the full application build succeeds.
+base fixture, the regression assertion passes against the candidate, affected
+workflow invariants pass, the candidate parses, and the scope audit passes.
+
+In localhost development the executor uses Node's permission model, fixed argv
+commands, a reduced environment, and a temporary workspace. In a Cloudflare
+deployment it uses the RepairSandbox container class, with public internet
+disabled and no repository or provider credentials in the VM. Both adapters
+capture stdout, stderr, exit codes, timestamps, SHA-256 evidence digests, and
+cleanup state. The source mutation is limited to the allowlisted delivery
+adapter path; the harness files are written by the trusted executor.
+
+The local adapter is the fully exercised hackathon runtime. The Cloudflare
+adapter and RepairSandbox Durable Object are wired for deployment, but a
+Cloudflare VM is not started by npm run dev; deployment requires the
+Cloudflare container runtime and its configured D1/Durable Object bindings.
+The Worker currently schedules the bounded run with ctx.waitUntil, which is
+appropriate for this short vertical slice. A production version should move
+longer or retryable repair orchestration into Workflows (or a queue-backed
+worker) while keeping this same executor contract and evidence envelope.
 
 The current repair class is deliberately bounded to the stateless provider
 adapter. It cannot change schemas, authentication, infrastructure, CI,
@@ -103,7 +120,8 @@ original goal plus the no-duplicate invariant.
 - Reload and confirm the blocked intent persists.
 - Discover the base WebMCP tools, including `add_user_context`.
 - Ask the browser agent what happened and optionally attach context.
-- Watch Engineering Review progress from sandbox creation through validation.
+- Watch Engineering Review progress from sandbox creation through validation,
+  including the command transcripts and write-scope audit.
 - Confirm the job stops at `ready_for_review` until promotion.
 - Promote the validated candidate and inspect deployment evidence.
 - Discover the temporary `resume_intent` tool.
@@ -114,3 +132,12 @@ The startup expansion can add repository connectors, screenshots, log ingestion,
 CI providers, real pull requests, and additional bounded repair classes behind
 the same contracts. WebMCP remains the in-browser interface through which the
 user's agent understands and continues the live workflow.
+
+## Deployment hardening boundary
+
+The demo session header is a correlation mechanism, not user authentication.
+Before exposing a multi-tenant deployment, add authenticated session
+middleware, workspace/role checks, tenant-bound D1 queries, rate limits, and
+audit logging around every repair and deployment route. The browser agent is
+deliberately unable to reach the sandbox directly; it only receives the
+server-authorized WebMCP view of the interruption.

@@ -27,6 +27,18 @@ function sendError(res: express.Response, error: unknown, status = 400) {
   res.status(status).json({ success: false, error: message });
 }
 
+function startRepairInBackground(sessionId: string): void {
+  void demoStore.startRepair(sessionId).catch((error) => {
+    console.error(
+      JSON.stringify({
+        message: 'local repair execution failed',
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'healthy', application: 'heap-4', version: '1.0.0' });
 });
@@ -55,7 +67,9 @@ app.post('/api/demo/intents/:intentId/send', (req, res) => {
       return sendError(res, new Error('Intent and request correlation headers are required.'));
     }
 
-    const result = demoStore.sendInvoice(getDemoSessionId(req), req.body.intent, requestId);
+    const sessionId = getDemoSessionId(req);
+    const result = demoStore.sendInvoice(sessionId, req.body.intent, requestId);
+    if (!result.success) startRepairInBackground(sessionId);
     return res.status(result.success ? 200 : 500).json(result);
   } catch (error) {
     return sendError(res, error);
@@ -64,7 +78,10 @@ app.post('/api/demo/intents/:intentId/send', (req, res) => {
 
 app.post('/api/demo/intents/:intentId/repair', (req, res) => {
   try {
-    res.json(demoStore.requestRepair(getDemoSessionId(req), req.params.intentId));
+    const sessionId = getDemoSessionId(req);
+    const result = demoStore.requestRepair(sessionId, req.params.intentId);
+    startRepairInBackground(sessionId);
+    res.json(result);
   } catch (error) {
     sendError(res, error);
   }

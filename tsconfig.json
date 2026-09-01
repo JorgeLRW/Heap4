@@ -3,6 +3,7 @@
     "target": "ES2022",
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -16,5 +17,12 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "server", "worker", "db", "test", "drizzle.config.ts", "vite.config.ts"]
+  "include": [
+    "src",
+    "server",
+    "db",
+    "test",
+    "drizzle.config.ts",
+    "vite.config.ts"
+  ]
 }

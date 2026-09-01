@@ -40,6 +40,21 @@ async function runResumeTests() {
   assert(repair.approvalRequired === true, 'Repair cannot self-deploy');
   assert(repair.artifact.patch.includes('deliverOnce'), 'Repair contains a concrete scoped patch');
   assert(repair.artifact.regressionTest.includes('invoiceCreateCount remains 1'), 'Repair contains an invariant regression test');
+  assert(readyRepair.sandbox.execution.mode === 'local_bounded_process', 'Local verification uses the bounded process adapter');
+  assert(readyRepair.sandbox.execution.lifecycle === 'destroyed', 'Ephemeral repair workspace is destroyed after evidence capture');
+  assert(readyRepair.sandbox.execution.commands.length === 5, 'Five real sandbox commands emit evidence');
+  assert(
+    readyRepair.sandbox.execution.commands.every((command) => command.exitCode === 0 && command.digest.length === 64),
+    'Every sandbox command exits cleanly with a SHA-256 evidence digest',
+  );
+  assert(
+    readyRepair.sandbox.execution.attemptedWrites.join(',') === 'src/server/services/DeliveryService.ts',
+    'Agent mutation is confined to the allowlisted adapter file',
+  );
+  assert(
+    readyRepair.sandbox.execution.baseDigest !== readyRepair.sandbox.execution.candidateDigest,
+    'Candidate digest proves the sandbox source actually changed',
+  );
 
   const build = await intentRuntime.deployRepair(readyRepair.id);
   assert(build === 'demo-build-b', 'Explicit approval deploys demo-build-b');
