@@ -15,6 +15,9 @@ try {
   console.log('\n--- 4. Testing Dynamic WebMCP Tool Registry & Inspection ---');
   execSync('npx tsx tests/webmcp.test.ts', { stdio: 'inherit' });
 
+  console.log('\n--- 5. Testing Alternate-Route Mitigation & Capability Lifecycle ---');
+  execSync('npx tsx tests/alternateRoute.test.ts', { stdio: 'inherit' });
+
   console.log('\n🎉 ALL TEST SUITES PASSED (100%)!');
 } catch (err) {
   console.error('\n❌ Test suite failed.');

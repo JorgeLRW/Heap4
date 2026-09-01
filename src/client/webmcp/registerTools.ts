@@ -9,12 +9,16 @@
 import {
   getModelContext,
   registerModelContextTool,
+  type ModelContextTool,
 } from '../../webmcp/modelContext';
 import { intentRuntime } from '../heap/intentRuntime';
 import type { Intent } from '../heap/intentTypes';
 
+const dynamicControllers = new Map<DynamicToolName, AbortController>();
+
+type DynamicToolName = 'deliver_by_alternate_route' | 'revoke_alternate_delivery' | 'resume_intent';
+
 let baseRegistrationPromise: Promise<void> | null = null;
-let resumeAbortController: AbortController | null = null;
 
 /** Structured failure payload so the agent can self-correct within one roundtrip. */
 function toolError(
@@ -31,6 +35,34 @@ function intentNotFound(intentId: string): Record<string, unknown> {
     validIntentIds: intentRuntime.getAllIntents().map((intent) => intent.id),
     recoveryHint: 'Call list_active_intents to obtain a currently tracked intentId.',
   });
+}
+
+/** Grant metadata minus the token digest, which is never agent-visible. */
+function describeAccessGrant() {
+  const grant = intentRuntime.getAccessGrant();
+  if (!grant) return null;
+  return {
+    id: grant.id,
+    invoiceId: grant.invoiceId,
+    audience: grant.audience,
+    scope: grant.scope,
+    issuedAt: grant.issuedAt,
+    expiresAt: grant.expiresAt,
+    issuedVia: grant.issuedVia,
+    active: intentRuntime.hasUsableAccessGrant(),
+    revokedAt: grant.revokedAt ?? null,
+    revokedReason: grant.revokedReason ?? null,
+  };
+}
+
+function describeRoutes(intent: Intent) {
+  return {
+    outcome: intent.goal.outcome,
+    primary: intent.goal.primaryRoute,
+    primaryRouteHealthy: intentRuntime.getCurrentBuild() === 'demo-build-b',
+    alternates: intent.goal.alternateRoutes,
+    outcomeReachedVia: intent.progress.goalSatisfiedVia ?? null,
+  };
 }
 
 async function refreshAndGetIntent(intentId: string) {
@@ -58,9 +90,11 @@ export function initializeWebMCPTools(): Promise<void> {
         const intents = intentRuntime.getActiveIntents().map((intent) => ({
           intentId: intent.id,
           goal: intent.goal.description,
+          outcome: intent.goal.outcome,
           status: intent.status,
           completedSteps: intent.progress.completedSteps,
           unfinishedStep: intent.progress.failedStep || intent.progress.gap,
+          outcomeReachedVia: intent.progress.goalSatisfiedVia ?? null,
           invariants: intent.invariants,
         }));
         const result = { intents, count: intents.length };
@@ -79,7 +113,7 @@ export function initializeWebMCPTools(): Promise<void> {
       name: 'inspect_intent',
       title: 'Inspect Interrupted Workflow',
       description:
-        'Inspect an unfinished workflow, including the user goal, partial state, protected invariants, correlated HTTP failure, build, source location, and repair status.',
+        'Inspect an unfinished workflow, including the user goal, which routes can still reach it, partial state, protected invariants, correlated HTTP failure, build, source location, and repair status.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -106,11 +140,13 @@ export function initializeWebMCPTools(): Promise<void> {
               intentId: intent.id,
               actor: intent.actor,
               goal: intent.goal,
+              routes: describeRoutes(intent),
               entities: intent.entities,
               progress: intent.progress,
               invariants: intent.invariants,
               status: intent.status,
               failure: intent.runtimeContext,
+              accessGrant: describeAccessGrant(),
               repair: intentRuntime.getRepairJob(),
             }
           : intentNotFound(id);
@@ -271,7 +307,7 @@ export function initializeWebMCPTools(): Promise<void> {
       name: 'verify_intent',
       title: 'Verify Original Goal',
       description:
-        'Verify from server-authoritative state whether the original human goal succeeded and its no-duplicate invariant remained intact.',
+        'Verify from server-authoritative state whether the user\'s original outcome was reached, which route reached it, whether the primary route is repaired, and whether the no-duplicate invariant held.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -296,7 +332,7 @@ export function initializeWebMCPTools(): Promise<void> {
           return missing;
         }
         const goalSatisfied = Boolean(
-          intent.status === 'completed' && intent.progress.deliveryCompleted
+          intent.progress.deliveryCompleted || intentRuntime.hasUsableAccessGrant()
         );
         intentRuntime.requestAgentUiFocus({
           target: 'recovery_drawer',
@@ -307,7 +343,12 @@ export function initializeWebMCPTools(): Promise<void> {
         const result = {
           intentId: id,
           goalSatisfied,
+          outcome: intent.goal.outcome,
+          outcomeReachedVia: intent.progress.goalSatisfiedVia ?? null,
           successCondition: intent.goal.successCondition,
+          primaryRouteDelivered: intent.progress.deliveryCompleted,
+          primaryRouteRepaired: intentRuntime.getCurrentBuild() === 'demo-build-b',
+          outstandingAccessGrant: describeAccessGrant(),
           invoiceCreateCount: intentRuntime.getInvoiceCreateCount(),
           invariantsPreserved: intentRuntime.getInvoiceCreateCount() === 1,
         };
@@ -332,89 +373,259 @@ export function initializeWebMCPTools(): Promise<void> {
   return baseRegistrationPromise;
 }
 
-/** Keep the mutating resume capability absent until the repaired build is live. */
+/**
+ * The dynamic surface is a pure function of server-authoritative state: each
+ * capability is registered exactly while the server would authorize it, and
+ * disappears the moment it would not.
+ */
 export async function onIntentStatusChange(intent: Intent | null): Promise<void> {
-  if (intent?.status !== 'resumable') {
-    if (resumeAbortController) {
-      resumeAbortController.abort();
-      resumeAbortController = null;
+  const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
+  const primaryRouteBroken = intent?.status === 'blocked' || intent?.status === 'mitigated';
+  const alternateRouteAvailable = Boolean(
+    intent &&
+      primaryRouteBroken &&
+      !hasUsableGrant &&
+      intent.goal.alternateRoutes.includes('secure_share_link')
+  );
+
+  await Promise.all([
+    syncDynamicTool('deliver_by_alternate_route', alternateRouteAvailable, buildAlternateRouteTool),
+    syncDynamicTool('revoke_alternate_delivery', hasUsableGrant, buildRevokeAlternateRouteTool),
+    syncDynamicTool('resume_intent', intent?.status === 'resumable', buildResumeTool),
+  ]);
+}
+
+async function syncDynamicTool(
+  name: DynamicToolName,
+  shouldBeRegistered: boolean,
+  build: () => ModelContextTool,
+): Promise<void> {
+  const existing = dynamicControllers.get(name);
+
+  if (!shouldBeRegistered) {
+    if (existing) {
+      dynamicControllers.delete(name);
+      existing.abort();
     }
     return;
   }
 
-  if (resumeAbortController || !getModelContext()) return;
+  if (existing || !getModelContext()) return;
   const controller = new AbortController();
-  resumeAbortController = controller;
+  dynamicControllers.set(name, controller);
 
   try {
-    await registerModelContextTool(
-      {
-        name: 'resume_intent',
-        title: 'Resume Repaired Workflow',
-        description:
-          'Resume only the unfinished delivery step after an approved repair is deployed. The server rejects blocked intents and duplicate invoice creation.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            intentId: { type: 'string', description: 'Resumable intent identifier.' },
-          },
-          required: ['intentId'],
-        },
-        annotations: { readOnlyHint: false },
-        execute: async ({ intentId }) => {
-          const startedAt = performance.now();
-          const id = String(intentId);
-          const current = await refreshAndGetIntent(id);
-          if (!current) return intentNotFound(id);
-          if (current.status !== 'resumable') {
-            return toolError(
-              'intent_not_resumable',
-              'The server only resumes an intent after an approved repair is deployed.',
-              {
-                intentId: id,
-                currentStatus: current.status,
-                requiredStatus: 'resumable',
-                recoveryHint: 'Call get_repair_status and wait for an approved deployment.',
-              },
-            );
-          }
-
-          const result = await intentRuntime.resumeIntent(id);
-          intentRuntime.logToolCall(
-            'resume_intent',
-            { intentId: id },
-            result,
-            Math.max(1, Math.round(performance.now() - startedAt)),
-            false
-          );
-          intentRuntime.requestAgentUiFocus({
-            target: 'recovery_drawer',
-            intentId: id,
-            highlight: 'verification',
-            toolName: 'resume_intent',
-          });
-          const response = {
-            success: result.success,
-            intentId: id,
-            status: result.intent.status,
-            completedOnlyMissingStep: true,
-          };
-          // Let the invocation result reach the browser agent before the tool's
-          // AbortSignal removes resume_intent from the dynamic surface.
-          setTimeout(() => void onIntentStatusChange(result.intent), 0);
-          return response;
-        },
-      },
-      { signal: controller.signal }
-    );
+    await registerModelContextTool(build(), { signal: controller.signal });
   } catch (error) {
-    if (resumeAbortController === controller) resumeAbortController = null;
+    if (dynamicControllers.get(name) === controller) dynamicControllers.delete(name);
     throw error;
   }
 }
 
+/** Re-evaluates the surface after a tool call has already returned its result. */
+function scheduleSurfaceSync(intent: Intent | null): void {
+  setTimeout(() => void onIntentStatusChange(intent), 0);
+}
+
+/**
+ * Present only while the primary route is broken and no share link is live.
+ * This reaches the user's outcome without waiting for, or standing in for, the
+ * engineering repair.
+ */
+function buildAlternateRouteTool(): ModelContextTool {
+  return {
+    name: 'deliver_by_alternate_route',
+    title: 'Reach the Outcome Another Way',
+    description:
+      "Reach the user's original outcome while the primary route is still broken, by issuing a scoped, expiring, revocable share link to the existing invoice. This does not mark the invoice sent, change its amount, create a second invoice, or repair the defect. Hand the returned link to the user.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Blocked intent whose outcome should be reached another way.' },
+      },
+      required: ['intentId'],
+    },
+    annotations: { readOnlyHint: false },
+    execute: async ({ intentId }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const logAndReturn = (payload: Record<string, unknown>) => {
+        intentRuntime.logToolCall(
+          'deliver_by_alternate_route',
+          { intentId: id },
+          // The capability URL is deliberately excluded from the audit log.
+          { ...payload, accessUrl: undefined },
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false,
+        );
+        return payload;
+      };
+
+      const current = await refreshAndGetIntent(id);
+      if (!current) return logAndReturn(intentNotFound(id));
+      if (current.status !== 'blocked' && current.status !== 'mitigated') {
+        return logAndReturn(
+          toolError(
+            'alternate_route_not_applicable',
+            'The primary route is not broken, so no alternate route is needed.',
+            {
+              intentId: id,
+              currentStatus: current.status,
+              recoveryHint: 'Call inspect_intent to see which routes can still reach the outcome.',
+            },
+          ),
+        );
+      }
+
+      const { grant, accessUrl, intent: updated } = await intentRuntime.grantAlternateAccess(id, 'webmcp_agent');
+      intentRuntime.requestAgentUiFocus({
+        target: 'recovery_drawer',
+        intentId: id,
+        highlight: 'alternate_route',
+        toolName: 'deliver_by_alternate_route',
+      });
+      scheduleSurfaceSync(updated);
+
+      return logAndReturn({
+        intentId: id,
+        outcomeReached: true,
+        via: 'secure_share_link',
+        accessUrl,
+        expiresAt: grant.expiresAt,
+        scope: grant.scope,
+        audience: grant.audience,
+        primaryRouteStillBroken: true,
+        repairStatus: intentRuntime.getRepairJob()?.status ?? 'not_started',
+        handOff:
+          'Give this link to the user. It is shown once, reads one invoice, expires, and can be revoked with revoke_alternate_delivery.',
+      });
+    },
+  };
+}
+
+/** Present only while a usable share link exists, so a workaround is always retractable. */
+function buildRevokeAlternateRouteTool(): ModelContextTool {
+  return {
+    name: 'revoke_alternate_delivery',
+    title: 'Revoke the Share Link',
+    description:
+      'Revoke the share link issued as a workaround, for example once the primary route is repaired and the invoice has genuinely been sent. Access stops immediately.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Intent whose share link should be revoked.' },
+        reason: { type: 'string', description: 'Why the workaround is no longer needed, up to 200 characters.' },
+      },
+      required: ['intentId', 'reason'],
+    },
+    annotations: { readOnlyHint: false },
+    execute: async ({ intentId, reason }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const note = String(reason ?? '');
+      const logAndReturn = (payload: Record<string, unknown>) => {
+        intentRuntime.logToolCall(
+          'revoke_alternate_delivery',
+          { intentId: id, reason: note },
+          payload,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false,
+        );
+        return payload;
+      };
+
+      if (note.trim().length === 0 || note.length > 200) {
+        return logAndReturn(
+          toolError('invalid_argument', 'A revocation reason of 1 to 200 characters is required.', {
+            field: 'reason',
+            validLength: [1, 200],
+            receivedLength: note.length,
+          }),
+        );
+      }
+      if (!(await refreshAndGetIntent(id))) return logAndReturn(intentNotFound(id));
+
+      const updated = await intentRuntime.revokeAlternateAccess(id, note);
+      intentRuntime.requestAgentUiFocus({
+        target: 'recovery_drawer',
+        intentId: id,
+        highlight: 'alternate_route',
+        toolName: 'revoke_alternate_delivery',
+      });
+      scheduleSurfaceSync(updated);
+
+      return logAndReturn({
+        intentId: id,
+        revoked: true,
+        status: updated.status,
+        accessGrant: describeAccessGrant(),
+      });
+    },
+  };
+}
+
+/** Present only while an approved repair has made the primary route usable again. */
+function buildResumeTool(): ModelContextTool {
+  return {
+    name: 'resume_intent',
+    title: 'Resume Repaired Workflow',
+    description:
+      'Resume only the unfinished delivery step after an approved repair is deployed. The server rejects blocked intents and duplicate invoice creation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Resumable intent identifier.' },
+      },
+      required: ['intentId'],
+    },
+    annotations: { readOnlyHint: false },
+    execute: async ({ intentId }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const current = await refreshAndGetIntent(id);
+      if (!current) return intentNotFound(id);
+      if (current.status !== 'resumable') {
+        return toolError(
+          'intent_not_resumable',
+          'The server only resumes an intent after an approved repair is deployed.',
+          {
+            intentId: id,
+            currentStatus: current.status,
+            requiredStatus: 'resumable',
+            recoveryHint: 'Call get_repair_status and wait for an approved deployment.',
+          },
+        );
+      }
+
+      const result = await intentRuntime.resumeIntent(id);
+      intentRuntime.logToolCall(
+        'resume_intent',
+        { intentId: id },
+        result,
+        Math.max(1, Math.round(performance.now() - startedAt)),
+        false,
+      );
+      intentRuntime.requestAgentUiFocus({
+        target: 'recovery_drawer',
+        intentId: id,
+        highlight: 'verification',
+        toolName: 'resume_intent',
+      });
+      // Let this result reach the browser agent before the surface changes.
+      scheduleSurfaceSync(result.intent);
+      return {
+        success: result.success,
+        intentId: id,
+        status: result.intent.status,
+        completedOnlyMissingStep: true,
+        outstandingAccessGrant: describeAccessGrant(),
+      };
+    },
+  };
+}
+
 export function resetWebMCPRegistrationForTests(): void {
   baseRegistrationPromise = null;
-  if (resumeAbortController) resumeAbortController.abort();
-  resumeAbortController = null;
+  for (const controller of dynamicControllers.values()) controller.abort();
+  dynamicControllers.clear();
 }

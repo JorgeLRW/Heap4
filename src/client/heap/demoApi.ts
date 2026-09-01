@@ -1,4 +1,10 @@
-import type { DemoApi, DemoSessionState, RepairJob } from '../../shared/demoApiTypes';
+import type {
+  AlternateRouteResult,
+  DemoApi,
+  DemoSessionState,
+  InvoiceAccessView,
+  RepairJob,
+} from '../../shared/demoApiTypes';
 import type { Intent } from './intentTypes';
 import { getDemoSessionId } from './session';
 
@@ -13,7 +19,9 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   const payload = await response.json();
-  if (!response.ok && response.status !== 500) {
+  // 500 carries the failure capsule and 403 carries the share-link rejection;
+  // both are structured results rather than transport errors.
+  if (!response.ok && response.status !== 500 && response.status !== 403) {
     throw new Error(payload.error || `Heap 4 API request failed (${response.status})`);
   }
   return payload as T;
@@ -70,6 +78,26 @@ export class HttpDemoApi implements DemoApi {
     return requestJson<{ success: boolean; state: DemoSessionState }>(
       `/api/demo/intents/${encodeURIComponent(intentId)}/resume`,
       { method: 'POST', body: '{}' }
+    );
+  }
+
+  grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user') {
+    return requestJson<AlternateRouteResult>(
+      `/api/demo/intents/${encodeURIComponent(intentId)}/alternate-route`,
+      { method: 'POST', body: JSON.stringify({ issuedVia }) },
+    );
+  }
+
+  revokeAlternateAccess(intentId: string, reason: string) {
+    return requestJson<{ success: boolean; state: DemoSessionState }>(
+      `/api/demo/intents/${encodeURIComponent(intentId)}/alternate-route/revoke`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  }
+
+  readInvoiceByAccessToken(token: string) {
+    return requestJson<{ success: boolean; invoice?: InvoiceAccessView; error?: string }>(
+      `/api/demo/invoice-access/${encodeURIComponent(token)}`,
     );
   }
 }

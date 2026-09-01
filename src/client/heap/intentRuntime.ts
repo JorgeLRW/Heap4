@@ -5,7 +5,15 @@
  * authority for build state, partial invoice state, repair approval, and resume.
  */
 
-import type { DemoApi, DemoBuild, DemoSessionState, RepairJob } from '../../shared/demoApiTypes';
+import type {
+  DemoApi,
+  DemoBuild,
+  DemoSessionState,
+  InvoiceAccessGrant,
+  InvoiceAccessView,
+  RepairJob,
+} from '../../shared/demoApiTypes';
+import { evaluateGrantUsability } from '../../shared/accessGrants';
 import { httpDemoApi } from './demoApi';
 import type { Intent, ToolActivityRecord } from './intentTypes';
 import { onIntentStatusChange } from '../webmcp/registerTools';
@@ -14,7 +22,7 @@ import { onIntentStatusChange } from '../webmcp/registerTools';
 export interface AgentUiFocus {
   target: 'recovery_drawer' | 'repair_panel';
   intentId: string;
-  highlight?: 'failure_source' | 'sandbox_evidence' | 'verification';
+  highlight?: 'failure_source' | 'sandbox_evidence' | 'verification' | 'alternate_route';
   toolName: string;
   at: number;
 }
@@ -27,6 +35,9 @@ export class IntentRuntime {
   private toolLogs: ToolActivityRecord[] = [];
   private currentBuild: DemoBuild = 'demo-build-a';
   private repairJob: RepairJob | null = null;
+  private accessGrant: InvoiceAccessGrant | null = null;
+  /** Held in memory only; the plaintext token is never persisted server-side. */
+  private lastIssuedAccessUrl: string | null = null;
   private invoiceCreateCount = 0;
   private api: DemoApi = httpDemoApi;
   private repairPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -74,6 +85,18 @@ export class IntentRuntime {
 
   public getInvoiceCreateCount(): number {
     return this.invoiceCreateCount;
+  }
+
+  public getAccessGrant(): InvoiceAccessGrant | null {
+    return this.accessGrant;
+  }
+
+  public hasUsableAccessGrant(): boolean {
+    return Boolean(this.accessGrant && evaluateGrantUsability(this.accessGrant).usable);
+  }
+
+  public getLastIssuedAccessUrl(): string | null {
+    return this.lastIssuedAccessUrl;
   }
 
   /** Executes a genuine same-origin HTTP request that returns a controlled 500. */
@@ -129,6 +152,34 @@ export class IntentRuntime {
     return { success: result.success, intent };
   }
 
+  /** Reaches the user's outcome through the allowlisted alternate route. */
+  public async grantAlternateAccess(
+    intentId: string,
+    issuedVia: 'webmcp_agent' | 'user' = 'user',
+  ): Promise<{ grant: InvoiceAccessGrant; accessUrl: string; intent: Intent }> {
+    const result = await this.api.grantAlternateAccess(intentId, issuedVia);
+    this.lastIssuedAccessUrl = result.accessUrl;
+    this.applyServerState(result.state);
+    const intent = this.intents.get(intentId);
+    if (!intent) throw new Error(`Server did not return intent ${intentId}`);
+    return { grant: result.grant, accessUrl: result.accessUrl, intent };
+  }
+
+  public async revokeAlternateAccess(intentId: string, reason: string): Promise<Intent> {
+    const result = await this.api.revokeAlternateAccess(intentId, reason);
+    this.lastIssuedAccessUrl = null;
+    this.applyServerState(result.state);
+    const intent = this.intents.get(intentId);
+    if (!intent) throw new Error(`Server did not return intent ${intentId}`);
+    return intent;
+  }
+
+  public readInvoiceByAccessToken(
+    token: string,
+  ): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }> {
+    return this.api.readInvoiceByAccessToken(token);
+  }
+
   public logToolCall(
     toolName: string,
     parameters: Record<string, unknown>,
@@ -154,6 +205,7 @@ export class IntentRuntime {
   public async resetDemo(): Promise<void> {
     this.toolLogs = [];
     this.lastAgentUiFocus = null;
+    this.lastIssuedAccessUrl = null;
     this.stopRepairPolling();
     this.applyServerState(await this.api.reset());
     await onIntentStatusChange(null);
@@ -183,6 +235,7 @@ export class IntentRuntime {
   private applyServerState(state: DemoSessionState): void {
     this.currentBuild = state.build;
     this.repairJob = state.repairJob;
+    this.accessGrant = state.accessGrant;
     this.invoiceCreateCount = state.invoiceCreateCount;
     this.intents.clear();
     if (state.intent) this.intents.set(state.intent.id, state.intent);

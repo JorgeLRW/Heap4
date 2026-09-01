@@ -11,8 +11,15 @@ export interface IntentActor {
 
 export interface IntentGoal {
   description: string; // e.g. "Acme Corp can access invoice INV-2841"
-  successCondition: string; // e.g. "invoice.deliveryStatus === 'sent'"
+  /** What the user needs, stated independently of how the app happens to deliver it. */
+  outcome: string;
+  successCondition: string; // satisfied by the primary route or an allowlisted alternate
+  primaryRoute: GoalRoute;
+  alternateRoutes: GoalRoute[];
 }
+
+/** How a goal's outcome can be reached. A broken route is not a lost goal. */
+export type GoalRoute = 'email_delivery' | 'secure_share_link';
 
 export interface IntentEntities {
   invoiceId: string;
@@ -27,6 +34,8 @@ export interface IntentProgress {
   completedSteps: string[];
   failedStep?: string;
   gap?: string;
+  /** Records which route actually reached the outcome, once one did. */
+  goalSatisfiedVia?: GoalRoute;
 }
 
 export interface RuntimeContext {
@@ -47,7 +56,18 @@ export interface RuntimeContext {
   timestamp: string;
 }
 
-export type IntentStatus = 'active' | 'interrupted' | 'blocked' | 'resumable' | 'completed';
+/**
+ * `mitigated` means the user's outcome was reached through an alternate route
+ * while the primary route is still broken. It is deliberately distinct from
+ * `completed`, which requires the primary route to work.
+ */
+export type IntentStatus =
+  | 'active'
+  | 'interrupted'
+  | 'blocked'
+  | 'mitigated'
+  | 'resumable'
+  | 'completed';
 
 export interface Intent {
   id: string; // "int_2841"

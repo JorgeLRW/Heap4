@@ -54,6 +54,13 @@ async function runWebMCPTests() {
 
   intentRuntime.createIntent(createInvoiceIntent());
   await intentRuntime.executeSendInvoiceWorkflow('int_2841');
+  await new Promise((resolve) => setTimeout(resolve, 2));
+
+  const blockedTools = await modelContext.getTools();
+  assert(
+    blockedTools.some((tool) => tool.name === 'deliver_by_alternate_route'),
+    'A broken primary route exposes the alternate route rather than only a status view',
+  );
 
   const listTool = baseTools.find((tool) => tool.name === 'list_active_intents')!;
   const listResult = await modelContext.executeTool(listTool, '{}');

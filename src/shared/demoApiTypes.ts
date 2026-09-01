@@ -29,6 +29,39 @@ export interface DemoInvoiceRecord {
   deliveryStatus: 'pending' | 'sent';
   createdAt: string;
   sentAt?: string;
+  /** Set when the recipient reached the invoice without the email route. */
+  accessGrantedVia?: 'secure_share_link';
+}
+
+/**
+ * A scoped, expiring, revocable capability that lets the recipient read one
+ * invoice while the outbound email route is broken. The plaintext token is
+ * never persisted; only its SHA-256 digest is stored.
+ */
+export interface InvoiceAccessGrant {
+  id: string;
+  intentId: string;
+  invoiceId: string;
+  audience: string;
+  scope: 'read_invoice_only';
+  tokenHash: string;
+  issuedAt: string;
+  expiresAt: string;
+  issuedVia: 'webmcp_agent' | 'user';
+  revokedAt?: string;
+  revokedReason?: string;
+}
+
+/** The read-only projection returned to a holder of a valid share link. */
+export interface InvoiceAccessView {
+  invoiceId: string;
+  customerId: string;
+  amount: number;
+  currency: 'USD';
+  issuedTo: string;
+  createdAt: string;
+  expiresAt: string;
+  scope: 'read_invoice_only';
 }
 
 export interface RepairArtifact {
@@ -139,6 +172,15 @@ export interface DemoSessionState {
   intent: Intent | null;
   invoiceCreateCount: number;
   repairJob: RepairJob | null;
+  accessGrant: InvoiceAccessGrant | null;
+}
+
+export interface AlternateRouteResult {
+  success: boolean;
+  state: DemoSessionState;
+  grant: InvoiceAccessGrant;
+  /** Returned once, at issue time, and never persisted in plaintext. */
+  accessUrl: string;
 }
 
 export interface DemoApi {
@@ -149,4 +191,7 @@ export interface DemoApi {
   appendIntentContext(intentId: string, text: string, source?: 'user' | 'agent'): Promise<{ success: boolean; state: DemoSessionState }>;
   deployRepair(jobId: string): Promise<{ success: boolean; state: DemoSessionState }>;
   resumeIntent(intentId: string): Promise<{ success: boolean; state: DemoSessionState }>;
+  grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user'): Promise<AlternateRouteResult>;
+  revokeAlternateAccess(intentId: string, reason: string): Promise<{ success: boolean; state: DemoSessionState }>;
+  readInvoiceByAccessToken(token: string): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }>;
 }

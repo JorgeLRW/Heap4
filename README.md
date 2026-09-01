@@ -1,24 +1,100 @@
 # Heap 4
 
-**From runtime failure to verified recovery.**
+**A website that remembers what you were trying to do, and hands your agent exactly the capabilities that can still finish it.**
 
-Heap 4 is a lightweight runtime-to-repository bridge for interrupted web workflows. It preserves what a user was trying to accomplish, correlates that intent with a real server failure and relevant source context, automatically starts a bounded repair pipeline, validates the candidate in an explicitly scoped sandbox, and exposes the repaired workflow through native WebMCP so a browser agent can finish and verify the original task.
+Heap 4 is a WebMCP surface for interrupted web workflows. When a server failure interrupts a user, the site preserves the *outcome* the user was after — not just the button they clicked — and exposes it to a browser agent that arrives cold. The set of tools the agent can see changes as server-authoritative state changes, so an agent is offered a capability exactly while the server would authorize it, and never otherwise.
 
-## The one vertical slice
+## The thesis
+
+A broken route is not a lost goal.
+
+Most error handling conflates the two. "Send invoice" fails, so the workflow is dead until an engineer ships a fix. But the user's actual goal was *"Acme Corp can read invoice INV-2841"* — email was only the route. Heap 4 models that split explicitly, which lets a browser agent do something more useful than watch a status page.
+
+```text
+outcome:  Acme Corp can read invoice INV-2841
+  ├─ route: email_delivery      ← broken at DeliveryService.ts:42
+  └─ route: secure_share_link   ← allowlisted, available right now
+```
+
+## The dynamic tool surface
+
+This is the part that is native to WebMCP and impossible in a static tool manifest. Heap 4's registered tools are a pure function of server state:
+
+| Server state | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
+| --- | :---: | :---: | :---: |
+| `active` — nothing wrong | absent | absent | absent |
+| `blocked` — primary route broken | **registered** | absent | absent |
+| `mitigated` — link live, defect open | absent | **registered** | absent |
+| `resumable` — repair deployed | absent | **registered** | **registered** |
+| `completed` — nothing outstanding | absent | absent | absent |
+
+The agent never has to guess whether an action is allowed. If the server would refuse it, the tool is not there. `deliver_by_alternate_route` withdraws itself the instant a link exists, so an agent cannot issue two. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
+
+## The vertical slice
 
 1. A user sends invoice `INV-2841` for $4,850.
-2. The server persists exactly one invoice, then executes a reproducible delivery-provider bug and returns HTTP 500.
-3. Heap 4 stores the goal, partial progress, request ID, build, stack, source location, and protected invariants.
-4. A repair worker automatically creates a job-scoped sandbox plan from the failure capsule.
-5. The pipeline reproduces the failure, produces a bounded patch, runs the affected checks, candidate parse, and write-scope audit, and waits at `ready_for_review`.
-6. A browser agent enters cold and discovers the interrupted workflow through WebMCP; it can inspect status or attach context while engineering proceeds.
-7. A human reviews the validated artifact and promotes the candidate release.
-8. The native WebMCP surface dynamically gains `resume_intent`.
-9. The browser agent runs only the missing delivery step and verifies that the original invoice was sent without duplication.
+2. The server persists exactly one invoice, then executes a reproducible delivery-provider defect and returns HTTP 500.
+3. Heap 4 stores the outcome, the routes that could reach it, partial progress, request ID, build, stack, source location, and protected invariants.
+4. A browser agent enters cold, discovers the interrupted workflow, and finds it can act — not just report.
+5. **Route A (seconds, no engineer):** the agent calls `deliver_by_alternate_route`. The server mints a scoped, expiring, revocable share link. Acme can read the invoice now. The invoice is *not* marked sent, the amount is untouched, no second invoice exists, and the defect is still open. The intent becomes `mitigated`, not `completed`.
+6. **Route B (in parallel):** a bounded repair job reproduces the failure in a job-scoped sandbox, produces a patch, runs the affected checks and a write-scope audit, and waits at `ready_for_review`.
+7. A human reviews the validated artifact and promotes the candidate.
+8. `resume_intent` appears. The agent runs only the missing delivery step and verifies the invoice was sent without duplication.
+9. The agent revokes the link it issued. The share URL stops resolving immediately.
 
-The website never edits its own source and the browser agent never receives repository or deployment authority.
+The website never edits its own source, and the browser agent never receives repository or deployment authority.
 
-See [WEBMCP_PIPELINE.md](WEBMCP_PIPELINE.md) for the exact browser-agent contract, authority boundaries, and acceptance checklist.
+See [WEBMCP_PIPELINE.md](WEBMCP_PIPELINE.md) for the exact contract, authority boundaries, and acceptance checklist.
+
+## WebMCP tools
+
+Base surface, always registered:
+
+- `list_active_intents` — discover unfinished human workflows.
+- `inspect_intent` — outcome, available routes, partial state, invariants, failure, source, grant, repair.
+- `add_user_context` — attach a concise clarification to the interruption capsule.
+- `request_repair` — refresh or explicitly request the bounded repair job.
+- `get_repair_status` — observe repair, deployment, and resumability state.
+- `verify_intent` — verify the outcome, which route reached it, and the no-duplicate invariant.
+
+Dynamic surface, registered only while the server would authorize it:
+
+- `deliver_by_alternate_route` — reach the outcome another way while the primary route is broken.
+- `revoke_alternate_delivery` — withdraw the workaround capability.
+- `resume_intent` — run only the unfinished step after an approved repair is deployed.
+
+Production registration is forwarded to the browser's real `document.modelContext.registerTool(...)`. The in-memory implementation in `src/webmcp/modelContext.ts` is installed by tests only and never attached to `document`, `window`, or `navigator`.
+
+## The share link is a real capability
+
+Not a decorative URL. The alternate route mints a bearer token that is:
+
+- **scoped** — reads one invoice, projected to `read_invoice_only` fields.
+- **expiring** — one hour, enforced server-side.
+- **revocable** — revocation stops resolution immediately.
+- **never stored in plaintext** — only its SHA-256 digest is persisted; the URL is returned once, at issue time, and is excluded from the tool audit log.
+- **session-free** — the recipient is not the authenticated user, so authority comes from the token's scope rather than a session. This is why `GET /api/demo/invoice-access/:token` is deliberately unauthenticated.
+
+## Authority boundaries
+
+```text
+Browser agent                Engineering worker
+user/application scope       repository scope
+        │                           │
+        ├── reach the outcome       ├── propose a patch
+        │   by an allowlisted       │
+        │   alternate route         │
+        │                           │
+        └────── Heap intent ────────┘
+                     │
+            explicit human approval
+                     │
+                 deployment
+                     │
+              WebMCP safe resume
+```
+
+The agent can inspect, mitigate, revoke, resume, and verify — all within user scope. Only explicit human approval changes the deployed build.
 
 ## Run locally
 
@@ -43,42 +119,15 @@ Because Cloudflare Workers Free does not include Containers, the public demo use
 2. Click **Send invoice** and confirm the HTTP 500 state.
 3. Close the recovery drawer and navigate to another area.
 4. Ask the browser agent: **“What happened to what I was doing?”**
-5. Confirm fresh `list_active_intents` and `inspect_intent` entries appear in the WebMCP inspector.
-6. Ask it to explain the interruption or attach context while the repair worker runs.
-7. Open **Engineering Review**, watch the sandbox command evidence and validation envelope reach `ready_for_review`, then approve promotion.
-8. Ask: **“Can you finish it now?”**
-9. Confirm `resume_intent` and `verify_intent` execute, the invoice becomes sent, and the dynamic resume tool is removed after completion.
+5. Confirm `list_active_intents`, `inspect_intent`, and `deliver_by_alternate_route` appear in the WebMCP inspector.
+6. Ask: **“Can you get it to them another way?”** Confirm a share link is returned, the invoice still reads *not sent*, and the status becomes `mitigated`.
+7. Open the returned link and confirm the recipient view renders the invoice.
+8. Confirm `deliver_by_alternate_route` is gone and `revoke_alternate_delivery` has appeared.
+9. Open **Engineering Review**, watch sandbox evidence reach `ready_for_review`, then approve promotion.
+10. Ask: **“Can you finish it now?”** Confirm `resume_intent` runs, the invoice becomes sent, and no duplicate exists.
+11. Ask: **“The email went out — revoke that link.”** Confirm the share URL stops resolving and the dynamic surface returns to the six base tools.
 
 If the page reports that native WebMCP is unavailable, the normal application still works, but that browser is not a valid acceptance environment. Heap 4 intentionally does not install a JavaScript `modelContext` polyfill.
-
-## WebMCP tools
-
-- `list_active_intents` — discover unfinished human workflows.
-- `inspect_intent` — inspect goal, partial state, invariants, failure, source, and repair context.
-- `add_user_context` — attach a concise clarification to the interruption capsule.
-- `request_repair` — refresh or explicitly request the bounded repair job; failures normally start it automatically.
-- `get_repair_status` — observe repair, deployment, and resumability state.
-- `verify_intent` — verify the original outcome and no-duplicate invariant from server state.
-- `resume_intent` — dynamically available only while an approved repair makes the intent resumable.
-
-Production registration is forwarded to the browser's real `document.modelContext.registerTool(...)` implementation. The in-memory implementation in `src/webmcp/modelContext.ts` is installed explicitly by tests only and never attached to `document`, `window`, or `navigator`.
-
-## Authority boundaries
-
-```text
-Browser agent              Engineering worker
-user/application scope     repository scope
-        │                         │
-        └────── Heap intent ──────┘
-                    │
-           explicit approval
-                    │
-                deployment
-                    │
-           WebMCP safe resume
-```
-
-The browser agent can inspect, request, resume, and verify. The engineering boundary can propose a patch. Only explicit approval changes the deployed build.
 
 ## Verification
 
@@ -87,7 +136,7 @@ npm test
 npm run build
 ```
 
-The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, real local command execution, SHA-256 evidence, write-scope enforcement, cleanup, review requirement, dynamic tool lifecycle, invariant-safe resume, and server-authoritative goal verification.
+The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, real local command execution, SHA-256 evidence, write-scope enforcement, cleanup, review requirement, the full dynamic capability lifecycle across all five intent states, capability-token scope and revocation, tamper rejection, invariant-safe mitigation and resume, and server-authoritative outcome verification.
 
 ## License
 

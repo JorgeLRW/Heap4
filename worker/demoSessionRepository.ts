@@ -19,8 +19,20 @@ const CREATE_SESSION_TABLE = `
   ) STRICT
 `;
 
+const CREATE_GRANT_INDEX_TABLE = `
+  CREATE TABLE IF NOT EXISTS invoice_access_grants (
+    token_hash TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT
+`;
+
 interface DemoSessionRow {
   state_json: string;
+}
+
+interface GrantIndexRow {
+  session_id: string;
 }
 
 export class DemoSessionRepository {
@@ -47,9 +59,37 @@ export class DemoSessionRepository {
   }
 
   async reset(sessionId: string): Promise<DemoSessionState> {
+    const previous = await this.get(sessionId);
+    if (previous.accessGrant) await this.dropGrantIndex(previous.accessGrant.tokenHash);
     const state = createInitialDemoState(sessionId);
     await this.save(state);
     return state;
+  }
+
+  async indexGrant(tokenHash: string, sessionId: string): Promise<void> {
+    await this.ensureSchema();
+    await this.db
+      .prepare(
+        `INSERT INTO invoice_access_grants (token_hash, session_id, created_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(token_hash) DO UPDATE SET session_id = excluded.session_id`,
+      )
+      .bind(tokenHash, sessionId, new Date().toISOString())
+      .run();
+  }
+
+  async dropGrantIndex(tokenHash: string): Promise<void> {
+    await this.ensureSchema();
+    await this.db.prepare('DELETE FROM invoice_access_grants WHERE token_hash = ?1').bind(tokenHash).run();
+  }
+
+  async findSessionIdByTokenHash(tokenHash: string): Promise<string | null> {
+    await this.ensureSchema();
+    const row = await this.db
+      .prepare('SELECT session_id FROM invoice_access_grants WHERE token_hash = ?1')
+      .bind(tokenHash)
+      .first<GrantIndexRow>();
+    return row?.session_id ?? null;
   }
 
   async save(state: DemoSessionState): Promise<void> {
@@ -68,5 +108,6 @@ export class DemoSessionRepository {
 
   private async ensureSchema(): Promise<void> {
     await this.db.prepare(CREATE_SESSION_TABLE).run();
+    await this.db.prepare(CREATE_GRANT_INDEX_TABLE).run();
   }
 }

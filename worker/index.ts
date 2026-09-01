@@ -1,11 +1,16 @@
 import { proxyToSandbox } from '@cloudflare/sandbox';
 import type { Intent } from '../src/client/heap/intentTypes';
+import { digestsMatch, hashAccessToken } from '../src/shared/accessGrants';
 import {
   appendIntentContextTransition,
   deployRepairTransition,
+  grantAlternateAccessTransition,
+  readInvoiceByGrant,
   requestRepairTransition,
   resumeIntentTransition,
+  revokeAlternateAccessTransition,
   sendInvoiceTransition,
+  toAccessView,
 } from '../src/shared/demoTransitions';
 import { executeRepairPipeline } from '../src/shared/repairSandboxExecution';
 import { CloudflareRepairSandbox } from './cloudflareRepairSandbox';
@@ -99,6 +104,32 @@ export default {
       return new Response(null, { status: 404 });
     }
 
+    // Resolved before session handling: the recipient holds a scoped capability
+    // token, not a session. Scope, expiry, and revocation carry the authority.
+    const accessMatch = url.pathname.match(/^\/api\/demo\/invoice-access\/([^/]+)$/);
+    if (request.method === 'GET' && accessMatch) {
+      try {
+        const sessions = new DemoSessionRepository(env.DB);
+        const presentedHash = await hashAccessToken(decodeURIComponent(accessMatch[1]));
+        const grantSessionId = await sessions.findSessionIdByTokenHash(presentedHash);
+        if (!grantSessionId) return json({ success: false, error: 'This share link is not valid.' }, 403);
+
+        const state = await sessions.get(grantSessionId);
+        if (!state.accessGrant || !digestsMatch(state.accessGrant.tokenHash, presentedHash)) {
+          return json({ success: false, error: 'This share link is not valid.' }, 403);
+        }
+
+        const resolved = readInvoiceByGrant(state);
+        if (!resolved.success) return json({ success: false, error: resolved.error }, 403);
+        return json({
+          success: true,
+          invoice: toAccessView(resolved.invoice, resolved.grant.expiresAt),
+        });
+      } catch {
+        return json({ success: false, error: 'This share link is not valid.' }, 403);
+      }
+    }
+
     try {
       const sessionId = getDemoSessionId(request);
       const sessions = new DemoSessionRepository(env.DB);
@@ -166,6 +197,35 @@ export default {
         const state = await sessions.get(sessionId);
         const result = resumeIntentTransition(state, decodeURIComponent(resumeMatch[1]));
         await sessions.save(state);
+        return json(result);
+      }
+
+      const revokeMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/alternate-route\/revoke$/);
+      if (request.method === 'POST' && revokeMatch) {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as { reason?: string };
+        const tokenHash = state.accessGrant?.tokenHash;
+        const result = revokeAlternateAccessTransition(
+          state,
+          decodeURIComponent(revokeMatch[1]),
+          String(body.reason || '').slice(0, 200) || 'No reason supplied.',
+        );
+        await sessions.save(state);
+        if (tokenHash) await sessions.dropGrantIndex(tokenHash);
+        return json(result);
+      }
+
+      const alternateRouteMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/alternate-route$/);
+      if (request.method === 'POST' && alternateRouteMatch) {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as { issuedVia?: 'webmcp_agent' | 'user' };
+        const result = await grantAlternateAccessTransition(
+          state,
+          decodeURIComponent(alternateRouteMatch[1]),
+          body.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user',
+        );
+        await sessions.save(state);
+        await sessions.indexGrant(result.grant.tokenHash, sessionId);
         return json(result);
       }
 

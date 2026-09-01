@@ -2,11 +2,44 @@
 
 Heap 4 is a working vertical slice of one product promise:
 
-> When a user workflow fails, preserve the unfinished intent, start a bounded engineering repair, validate it broadly, expose the deployment evidence, and let the browser agent continue only the missing step.
+> When a user workflow fails, preserve the outcome the user was after, offer the browser agent every route that can still reach it, and expose each capability only while the server would authorize it.
 
 The governing invariant is:
 
+> **A broken route is not a lost goal.**
+
+And for the repair path specifically:
+
 > **Narrow repair, broad validation, gradual exposure.**
+
+## Outcomes and routes
+
+An intent separates what the user needs from how the application happens to
+deliver it:
+
+```ts
+goal: {
+  outcome: 'Acme Corp can read invoice INV-2841 for $4,850',
+  primaryRoute: 'email_delivery',
+  alternateRoutes: ['secure_share_link'],
+}
+```
+
+When `email_delivery` breaks, the outcome is still reachable. That is the
+difference between an agent that reports an incident and an agent that resolves
+one. Two routes exist in this slice:
+
+| | Route A: alternate route | Route B: engineering repair |
+| --- | --- | --- |
+| Who acts | browser agent, user scope | repair worker, repository scope |
+| Time to outcome | seconds | review cycle |
+| Fixes the defect | no | yes |
+| Resulting status | `mitigated` | `resumable` then `completed` |
+| Human approval | not required | required before deployment |
+
+They are complementary, not alternatives. Route A gets the user unblocked; Route
+B removes the defect. A slice with only Route B would leave the agent waiting on
+engineers; a slice with only Route A would leave the bug in production.
 
 ## What WebMCP means here
 
@@ -18,7 +51,7 @@ page's own authenticated context.
 The server and repair worker do not depend on WebMCP to wake up. A server
 failure automatically creates an interruption capsule and starts the repair
 pipeline. WebMCP gives the user and agent a live, context-preserving window into
-that pipeline:
+that state — and, critically, a set of actions that changes with it:
 
 1. The page registers `list_active_intents`, `inspect_intent`,
    `add_user_context`, `request_repair`, `get_repair_status`, and
@@ -28,12 +61,35 @@ that pipeline:
 3. The agent invokes a tool through the browser-mediated
    `document.modelContext.executeTool()` path.
 4. The callback calls Heap 4's same-origin API and returns structured state.
-5. `resume_intent` is registered only after deployment evidence passes and the
-   intent is resumable. It is removed again after completion.
+5. Three further tools register and deregister themselves as server state moves.
 
 Heap 4 does not install a fake production `modelContext`. If the browser has no
 native WebMCP support, the application still works as a normal site and clearly
 reports that agent discovery is unavailable.
+
+## The dynamic capability surface
+
+`onIntentStatusChange` is the only place dynamic registration happens, and it is
+written as a pure projection of server-authoritative state onto a tool list:
+
+| Server state | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
+| --- | :---: | :---: | :---: |
+| `active` | absent | absent | absent |
+| `blocked` | registered | absent | absent |
+| `mitigated` | absent | registered | absent |
+| `resumable` | absent | registered | registered |
+| `completed` | absent | absent | absent |
+
+The properties this buys:
+
+- An agent is never offered an action the server would reject, so there is no
+  class of "tool call that always fails".
+- Issuing a share link withdraws the issuing capability, so double-issuance is
+  structurally impossible rather than merely validated.
+- The revoke capability outlives completion, so a workaround is always
+  retractable.
+- Every mutation still re-checks its precondition server-side. The dynamic
+  surface is a usability and safety affordance, not the enforcement boundary.
 
 ## The real end-to-end failure
 
@@ -46,13 +102,42 @@ The invoice flow uses the server service at
 4. The server persists an interruption capsule containing request correlation,
    stack/source context, build, unfinished step, and protected invariants.
 5. The server automatically creates a repair job with a sandbox plan.
-6. A browser agent can inspect the interruption or attach user context while the
-   engineering pipeline proceeds in the background.
+6. A browser agent can inspect the interruption, reach the outcome by the
+   alternate route, or attach user context while the pipeline proceeds.
 
 This is not a client-only error banner. The direct service path, HTTP failure,
 and persisted session state use the same failure boundary.
 
-## Repair pipeline and sandbox boundary
+## Route A: the alternate route
+
+`deliver_by_alternate_route` mints a capability token for the existing invoice.
+The server enforces that:
+
+- The intent is `blocked` or `mitigated`; a healthy route needs no workaround.
+- `secure_share_link` is in the intent's `alternateRoutes` allowlist.
+- The original invoice exists, and exactly one invoice record exists.
+- No usable grant is already outstanding.
+
+What it deliberately does **not** do:
+
+- It does not mark the invoice `sent`. Delivery did not happen.
+- It does not change the amount or create a second invoice.
+- It does not touch the build, the source, or the repair job.
+- It does not move the intent to `completed`. `mitigated` is a distinct state
+  meaning "the user is unblocked and the defect is still open".
+
+The token is scoped to `read_invoice_only`, expires after one hour, is
+revocable, and is persisted only as a SHA-256 digest. The plaintext URL is
+returned once, at issue time, and is stripped from the tool audit log. The
+recipient endpoint `GET /api/demo/invoice-access/:token` is intentionally
+session-free, because the recipient is not the authenticated user; authority
+comes from the token's scope, expiry, and revocation state.
+
+`revoke_alternate_delivery` withdraws the grant, drops the token index, and
+returns a `mitigated` intent to `blocked` — the workaround is gone and the
+primary route was never repaired.
+
+## Route B: repair pipeline and sandbox boundary
 
 Every repair job declares:
 
@@ -100,7 +185,9 @@ validation checks passing before the engineering review surface can promote it.
 
 Promotion records deployment evidence: candidate build, smoke-test result,
 canary result, and rollback readiness. Only then does the server mark the intent
-`resumable` and the page dynamically register `resume_intent`.
+`resumable` and the page dynamically register `resume_intent`. A mitigated
+intent is promotable too: a live workaround never blocks the real fix, and
+deploying the fix never silently revokes the workaround.
 
 Resume runs only the unfinished delivery step. The server still enforces that:
 
@@ -110,34 +197,46 @@ Resume runs only the unfinished delivery step. The server still enforces that:
 - Exactly one invoice record exists.
 - Deployment smoke and canary evidence passed.
 
-The final `verify_intent` tool reads server-authoritative state and confirms the
-original goal plus the no-duplicate invariant.
+Once the primary route succeeds, `progress.goalSatisfiedVia` moves from
+`secure_share_link` to `email_delivery`, and the agent can revoke the link it
+issued earlier. The final `verify_intent` tool reads server-authoritative state
+and reports the outcome, the route that reached it, whether the primary route
+was actually repaired, any outstanding grant, and the no-duplicate invariant.
 
 ## Acceptance checklist
 
 - Start from `demo-build-a` and send the invoice.
 - Observe the real HTTP 500 and source context at `DeliveryService.ts:42`.
 - Reload and confirm the blocked intent persists.
-- Discover the base WebMCP tools, including `add_user_context`.
+- Discover the base WebMCP tools plus `deliver_by_alternate_route`.
 - Ask the browser agent what happened and optionally attach context.
+- Reach the outcome by the alternate route; confirm the invoice is still not
+  sent, the amount is unchanged, and the status is `mitigated`.
+- Open the returned link and confirm the scoped recipient view.
+- Confirm `deliver_by_alternate_route` is withdrawn and
+  `revoke_alternate_delivery` has appeared.
 - Watch Engineering Review progress from sandbox creation through validation,
   including the command transcripts and write-scope audit.
 - Confirm the job stops at `ready_for_review` until promotion.
 - Promote the validated candidate and inspect deployment evidence.
 - Discover the temporary `resume_intent` tool.
 - Resume and verify the invoice is sent exactly once.
-- Confirm `resume_intent` is removed after completion.
+- Revoke the share link and confirm it stops resolving.
+- Confirm the dynamic surface returns to the six base tools.
 
 The startup expansion can add repository connectors, screenshots, log ingestion,
-CI providers, real pull requests, and additional bounded repair classes behind
-the same contracts. WebMCP remains the in-browser interface through which the
-user's agent understands and continues the live workflow.
+CI providers, real pull requests, further bounded repair classes, and further
+alternate routes behind the same contracts. WebMCP remains the in-browser
+interface through which the user's agent understands and continues the live
+workflow.
 
 ## Deployment hardening boundary
 
 The demo session header is a correlation mechanism, not user authentication.
 Before exposing a multi-tenant deployment, add authenticated session
 middleware, workspace/role checks, tenant-bound D1 queries, rate limits, and
-audit logging around every repair and deployment route. The browser agent is
-deliberately unable to reach the sandbox directly; it only receives the
-server-authorized WebMCP view of the interruption.
+audit logging around every repair and deployment route. Share-link issuance in
+particular should be rate limited and recorded in a tamper-evident audit trail,
+since it is the one agent-reachable capability that grants a third party read
+access. The browser agent is deliberately unable to reach the sandbox directly;
+it only receives the server-authorized WebMCP view of the interruption.

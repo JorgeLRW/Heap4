@@ -1,13 +1,23 @@
 import type { Intent } from '../src/client/heap/intentTypes';
-import type { DemoApi, DemoSessionState, RepairJob } from '../src/shared/demoApiTypes';
+import { digestsMatch, hashAccessToken } from '../src/shared/accessGrants';
+import type {
+  DemoApi,
+  DemoSessionState,
+  InvoiceAccessView,
+  RepairJob,
+} from '../src/shared/demoApiTypes';
 import {
   cloneDemoState,
   createInitialDemoState,
   appendIntentContextTransition,
   deployRepairTransition,
+  grantAlternateAccessTransition,
+  readInvoiceByGrant,
   requestRepairTransition,
   resumeIntentTransition,
+  revokeAlternateAccessTransition,
   sendInvoiceTransition,
+  toAccessView,
 } from '../src/shared/demoTransitions';
 import { executeRepairPipeline } from '../src/shared/repairSandboxExecution';
 import { LocalRepairSandbox } from './localRepairSandbox';
@@ -15,6 +25,8 @@ import { LocalRepairSandbox } from './localRepairSandbox';
 export class DemoStore {
   private sessions = new Map<string, DemoSessionState>();
   private repairRuns = new Map<string, Promise<RepairJob>>();
+  /** Capability-token digest to owning session, so a share link needs no session header. */
+  private grantIndex = new Map<string, string>();
 
   getState(sessionId: string): DemoSessionState {
     if (!this.sessions.has(sessionId)) {
@@ -25,6 +37,8 @@ export class DemoStore {
   }
 
   reset(sessionId: string): DemoSessionState {
+    const previous = this.sessions.get(sessionId);
+    if (previous?.accessGrant) this.grantIndex.delete(previous.accessGrant.tokenHash);
     const state = createInitialDemoState(sessionId);
     this.sessions.set(sessionId, state);
     return cloneDemoState(state);
@@ -48,6 +62,43 @@ export class DemoStore {
 
   resumeIntent(sessionId: string, intentId: string) {
     return resumeIntentTransition(this.mutableState(sessionId), intentId);
+  }
+
+  async grantAlternateAccess(
+    sessionId: string,
+    intentId: string,
+    issuedVia: 'webmcp_agent' | 'user',
+  ) {
+    const result = await grantAlternateAccessTransition(
+      this.mutableState(sessionId),
+      intentId,
+      issuedVia,
+    );
+    this.grantIndex.set(result.grant.tokenHash, sessionId);
+    return result;
+  }
+
+  revokeAlternateAccess(sessionId: string, intentId: string, reason: string) {
+    const state = this.mutableState(sessionId);
+    const tokenHash = state.accessGrant?.tokenHash;
+    const result = revokeAlternateAccessTransition(state, intentId, reason);
+    if (tokenHash) this.grantIndex.delete(tokenHash);
+    return result;
+  }
+
+  async readInvoiceByAccessToken(
+    token: string,
+  ): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }> {
+    const presentedHash = await hashAccessToken(token);
+    const sessionId = this.grantIndex.get(presentedHash);
+    const state = sessionId ? this.sessions.get(sessionId) : undefined;
+    if (!state?.accessGrant || !digestsMatch(state.accessGrant.tokenHash, presentedHash)) {
+      return { success: false, error: 'This share link is not valid.' };
+    }
+
+    const resolved = readInvoiceByGrant(state);
+    if (!resolved.success) return { success: false, error: resolved.error };
+    return { success: true, invoice: toAccessView(resolved.invoice, resolved.grant.expiresAt) };
   }
 
   async startRepair(sessionId: string): Promise<RepairJob> {
@@ -131,5 +182,17 @@ export class InMemoryDemoApi implements DemoApi {
 
   async resumeIntent(intentId: string) {
     return this.store.resumeIntent(this.sessionId, intentId);
+  }
+
+  async grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user') {
+    return this.store.grantAlternateAccess(this.sessionId, intentId, issuedVia);
+  }
+
+  async revokeAlternateAccess(intentId: string, reason: string) {
+    return this.store.revokeAlternateAccess(this.sessionId, intentId, reason);
+  }
+
+  async readInvoiceByAccessToken(token: string) {
+    return this.store.readInvoiceByAccessToken(token);
   }
 }

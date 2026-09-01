@@ -48,10 +48,13 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
   const invoiceIntent = intentRuntime.getIntent('int_2841');
   const isInvoiceCompleted = invoiceIntent?.status === 'completed';
   const isInvoiceInterrupted = invoiceIntent && invoiceIntent.status !== 'completed';
+  const isInvoiceMitigated = invoiceIntent?.status === 'mitigated';
+  // The server rejects re-dispatching an intent that already moved past 'active'.
+  const canDispatch = !invoiceIntent || invoiceIntent.status === 'active';
 
   // STEP 1, 2, 3: Send invoice workflow (Hits real DeliveryService.ts:42 failure!)
   const handleSendInvoice = async () => {
-    if (isInvoiceCompleted) return;
+    if (!canDispatch) return;
 
     setIsExecutingSend(true);
 
@@ -62,7 +65,11 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
       actor: { userId: 'user_demo', workspaceId: 'acme_finance', role: 'member' },
       goal: {
         description: 'Acme Corp can access invoice INV-2841 ($4,850.00)',
-        successCondition: "invoice.deliveryStatus === 'sent'",
+        outcome: 'Acme Corp can read invoice INV-2841 for $4,850',
+        successCondition:
+          "invoice.deliveryStatus === 'sent' || invoice.accessGrantedVia === 'secure_share_link'",
+        primaryRoute: 'email_delivery',
+        alternateRoutes: ['secure_share_link'],
       },
       entities: {
         invoiceId: 'INV-2841',
@@ -230,6 +237,8 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
                   className={`px-3 py-1 rounded-full text-xs font-mono font-semibold border ${
                     isInvoiceCompleted
                       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : isInvoiceMitigated
+                      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
                       : isInvoiceInterrupted
                       ? 'bg-rose-500/10 text-rose-300 border-rose-500/30'
                       : 'bg-slate-800 text-slate-300 border-slate-700'
@@ -237,12 +246,14 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
                 >
                   {isInvoiceCompleted
                     ? 'Sent ✓'
+                    : isInvoiceMitigated
+                    ? 'Shared via link · email still broken'
                     : isInvoiceInterrupted
                     ? 'Delivery interrupted'
                     : 'Draft'}
                 </span>
 
-                {!isInvoiceCompleted && (
+                {canDispatch && (
                   <button
                     onClick={handleSendInvoice}
                     disabled={isExecutingSend}
@@ -259,16 +270,28 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
             {isInvoiceInterrupted && invoiceIntent && (
               <div
                 onClick={() => onOpenRecoveryDrawer(invoiceIntent)}
-                className="p-4 bg-rose-950/20 border border-rose-500/30 rounded-2xl flex items-center justify-between cursor-pointer hover:bg-rose-950/30 transition-all"
+                className={`p-4 border rounded-2xl flex items-center justify-between cursor-pointer transition-all ${
+                  isInvoiceMitigated
+                    ? 'bg-amber-950/20 border-amber-500/30 hover:bg-amber-950/30'
+                    : 'bg-rose-950/20 border-rose-500/30 hover:bg-rose-950/30'
+                }`}
               >
                 <div className="flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                  <AlertCircle
+                    className={`w-5 h-5 shrink-0 ${isInvoiceMitigated ? 'text-amber-400' : 'text-rose-400'}`}
+                  />
                   <div className="text-xs">
-                    <div className="font-bold text-rose-300 font-mono">
-                      Server HTTP 500: Delivery dispatch failed (DeliveryService.ts:42)
+                    <div
+                      className={`font-bold font-mono ${isInvoiceMitigated ? 'text-amber-300' : 'text-rose-300'}`}
+                    >
+                      {isInvoiceMitigated
+                        ? 'Outcome reached by share link · DeliveryService.ts:42 still failing'
+                        : 'Server HTTP 500: Delivery dispatch failed (DeliveryService.ts:42)'}
                     </div>
                     <div className="text-slate-300 mt-0.5">
-                      Invoice INV-2841 exists in database. Heap 4 preserved intent and invariants.
+                      {isInvoiceMitigated
+                        ? 'Acme Corp can read INV-2841 now. The invoice is not marked sent and the repair is still open.'
+                        : 'Invoice INV-2841 exists in database. Heap 4 preserved intent and invariants.'}
                     </div>
                   </div>
                 </div>

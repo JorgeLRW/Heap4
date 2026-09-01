@@ -57,7 +57,9 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
       const timer = setTimeout(() => setSourcePulse(false), 2600);
       return () => clearTimeout(timer);
     }
-    if (agentFocus.highlight === 'verification') setActiveTab('recovery');
+    if (agentFocus.highlight === 'verification' || agentFocus.highlight === 'alternate_route') {
+      setActiveTab('recovery');
+    }
   }, [agentFocus?.at]);
 
   useEffect(() => {
@@ -87,8 +89,13 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const currentIntent = intentRuntime.getIntent(capsule.id) || capsule;
   const repairJob = intentRuntime.getRepairJob();
   const isBlocked = currentIntent.status === 'blocked';
+  const isMitigated = currentIntent.status === 'mitigated';
   const isResumable = currentIntent.status === 'resumable';
   const isCompleted = currentIntent.status === 'completed';
+  const accessGrant = intentRuntime.getAccessGrant();
+  const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
+  const issuedAccessUrl = intentRuntime.getLastIssuedAccessUrl();
+  const primaryRouteHealthy = intentRuntime.getCurrentBuild() === 'demo-build-b';
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[3px] transition-opacity animate-fade-in text-slate-100 font-sans">
@@ -103,12 +110,22 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                   : isResumable
                   ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20 animate-pulse'
+                  : isMitigated
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/20'
                   : isBlocked
                   ? 'bg-rose-500/10 text-rose-300 border-rose-500/20'
                   : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
               }`}
             >
-              {isCompleted ? '✓ COMPLETED' : isResumable ? '● RESUMABLE' : isBlocked ? '✕ BLOCKED' : '● ACTIVE'}
+              {isCompleted
+                ? '✓ COMPLETED'
+                : isResumable
+                ? '● RESUMABLE'
+                : isMitigated
+                ? '◐ MITIGATED'
+                : isBlocked
+                ? '✕ BLOCKED'
+                : '● ACTIVE'}
             </span>
           </div>
 
@@ -182,11 +199,33 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
           <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs font-mono">
             {/* Intent */}
             <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1">
-              <span className="text-[10px] uppercase font-bold text-indigo-400">Intent</span>
+              <span className="text-[10px] uppercase font-bold text-indigo-400">Outcome the user needs</span>
               <div className="text-sm font-sans font-bold text-white leading-snug">
-                {currentIntent.goal.description}
+                {currentIntent.goal.outcome}
               </div>
               <div className="text-emerald-400 font-bold">${currentIntent.entities.amount?.toLocaleString()} USD</div>
+            </div>
+
+            {/* Routes to the outcome */}
+            <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1.5">
+              <span className="text-[10px] uppercase font-bold text-slate-400">Routes to that outcome</span>
+              <div className="space-y-1 text-[11px]">
+                <div className={`flex items-center gap-1.5 ${primaryRouteHealthy ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  <span className={primaryRouteHealthy ? 'text-emerald-400' : 'text-rose-400'}>
+                    {primaryRouteHealthy ? '✓' : '✕'}
+                  </span>
+                  email_delivery · {primaryRouteHealthy ? 'repaired' : 'broken at DeliveryService.ts:42'}
+                </div>
+                <div className={`flex items-center gap-1.5 ${hasUsableGrant ? 'text-emerald-300' : 'text-slate-400'}`}>
+                  <span className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>
+                    {hasUsableGrant ? '✓' : '○'}
+                  </span>
+                  secure_share_link · {hasUsableGrant ? 'active' : 'available, not used'}
+                </div>
+              </div>
+              <div className="pt-1 text-[10px] text-slate-400 font-sans">
+                A broken route is not a lost goal. The outcome is reachable while the defect stays open.
+              </div>
             </div>
 
             {/* Progress */}
@@ -208,6 +247,9 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               <div>• Invoice ID: <strong className="text-white">{currentIntent.entities.invoiceId}</strong></div>
               <div>• Amount: <strong className="text-white">${currentIntent.entities.amount}</strong></div>
               <div>• Delivery: <strong className={isCompleted ? 'text-emerald-400' : 'text-rose-400'}>{isCompleted ? 'Sent ✓' : 'Incomplete'}</strong></div>
+              <div>• Outcome: <strong className={isCompleted || hasUsableGrant ? 'text-emerald-400' : 'text-rose-400'}>
+                {isCompleted ? 'Reached by email ✓' : hasUsableGrant ? 'Reached by share link ✓' : 'Not reached'}
+              </strong></div>
             </div>
 
             {/* Protected Invariants */}
@@ -233,6 +275,49 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </div>
             )}
 
+            {/* Alternate route capability */}
+            {accessGrant && (
+              <div
+                className={`p-3 rounded-xl border space-y-1.5 text-[11px] ${
+                  hasUsableGrant ? 'bg-amber-950/20 border-amber-500/30' : 'bg-slate-950/80 border-slate-800'
+                }`}
+              >
+                <span className="text-[10px] uppercase font-bold text-amber-400 block font-mono">
+                  Alternate route · secure share link
+                </span>
+                <div className="text-slate-300">
+                  • Grant: <strong className="text-white">{accessGrant.id}</strong>
+                </div>
+                <div className="text-slate-300">• Scope: <strong className="text-white">{accessGrant.scope}</strong></div>
+                <div className="text-slate-300">• Audience: <strong className="text-white">{accessGrant.audience}</strong></div>
+                <div className="text-slate-300">
+                  • Issued by:{' '}
+                  <strong className="text-white">
+                    {accessGrant.issuedVia === 'webmcp_agent' ? 'browser agent (WebMCP)' : 'user'}
+                  </strong>
+                </div>
+                <div className="text-slate-300">
+                  • State:{' '}
+                  <strong className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-400'}>
+                    {accessGrant.revokedAt ? `revoked — ${accessGrant.revokedReason}` : `expires ${new Date(accessGrant.expiresAt).toLocaleTimeString()}`}
+                  </strong>
+                </div>
+                {hasUsableGrant && issuedAccessUrl && (
+                  <a
+                    href={issuedAccessUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-950/40 hover:bg-amber-900/40 text-amber-200 rounded-lg font-mono text-[11px] border border-amber-500/30 transition-all"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Open the recipient's view
+                  </a>
+                )}
+                <p className="pt-0.5 text-[10px] text-slate-400 font-sans">
+                  Only the digest of this link is stored. It reads one invoice, expires, and is revocable.
+                </p>
+              </div>
+            )}
+
             {/* Status */}
             <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1 text-[11px]">
               <span className="text-[10px] uppercase font-bold text-slate-400 block font-mono">Status</span>
@@ -241,6 +326,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   ? 'text-emerald-400 font-bold'
                   : isResumable
                   ? 'text-indigo-300 font-bold'
+                  : isMitigated
+                  ? 'text-amber-300 font-bold'
                   : isBlocked
                   ? 'text-rose-300 font-bold'
                   : 'text-amber-300'
@@ -249,6 +336,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   ? 'Completed ✓ (Original goal verified)'
                   : isResumable
                   ? 'Resumable (validated candidate live • resume_intent available)'
+                  : isMitigated
+                  ? 'Mitigated · outcome reached by share link, email route still defective'
                   : repairJob
                   ? `Blocked · repair pipeline ${repairJob.status.replaceAll('_', ' ')}`
                   : 'Blocked by application defect'}
@@ -264,10 +353,16 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                     <span>Ask the browser agent:</span>
                   </div>
                   <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 font-mono text-indigo-300 text-xs select-all">
-                    {isResumable ? '"Can you finish it now?"' : '"What happened to what I was doing?"'}
+                    {isResumable
+                      ? '"Can you finish it now?"'
+                      : isMitigated
+                      ? '"Is the invoice actually fixed yet?"'
+                      : hasUsableGrant
+                      ? '"What happened to what I was doing?"'
+                      : '"Can you get it to them another way?"'}
                   </div>
 
-                  {isBlocked && (
+                  {(isBlocked || isMitigated) && (
                     <button
                       onClick={onOpenRepairPanel}
                       className="w-full py-2 px-3 bg-indigo-950/40 hover:bg-indigo-900/50 text-indigo-300 rounded-lg font-mono text-[11px] transition-all border border-indigo-500/30 flex items-center justify-center gap-1.5"
@@ -288,6 +383,16 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   <p className="text-xs text-slate-300 font-sans">
                     Executed delivery step only. Invariant preserved (0 duplicate invoices created).
                   </p>
+                  {hasUsableGrant && (
+                    <div className="pt-2 space-y-1.5">
+                      <p className="text-[11px] text-amber-300 font-sans">
+                        The workaround share link is still live. Ask the agent to clean up after itself:
+                      </p>
+                      <div className="p-2 bg-slate-900 rounded-lg border border-slate-800 font-mono text-indigo-300 text-[11px] select-all">
+                        "The email went out — revoke that link."
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -393,10 +498,29 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-[11px]">
               <span className="text-emerald-400 font-bold block">WebMCP Dynamic Tool Surface:</span>
               <p className="text-slate-300 text-[10px] font-sans">
-                {isResumable
-                  ? 'Intent is RESUMABLE. resume_intent() is dynamically registered only after deployment evidence passes.'
-                  : 'resume_intent() remains unregistered while the repair is blocked or still validating.'}
+                The tool list is a function of server-authoritative state, not a fixed manifest. A
+                capability is registered exactly while the server would authorize it.
               </p>
+              <div className="pt-1 space-y-0.5 text-[10px] font-mono text-slate-400">
+                <div>
+                  deliver_by_alternate_route —{' '}
+                  <span className={isBlocked || isMitigated ? 'text-emerald-400' : 'text-slate-500'}>
+                    {hasUsableGrant ? 'withdrawn (link already live)' : isBlocked ? 'registered' : 'absent'}
+                  </span>
+                </div>
+                <div>
+                  revoke_alternate_delivery —{' '}
+                  <span className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>
+                    {hasUsableGrant ? 'registered' : 'absent'}
+                  </span>
+                </div>
+                <div>
+                  resume_intent —{' '}
+                  <span className={isResumable ? 'text-emerald-400' : 'text-slate-500'}>
+                    {isResumable ? 'registered' : 'absent until deployment evidence passes'}
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -405,17 +529,19 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </span>
               <div className="space-y-1.5">
                 {registeredTools.map((t) => {
-                  const isResume = t.name === 'resume_intent';
+                  const isDynamic = ['resume_intent', 'deliver_by_alternate_route', 'revoke_alternate_delivery'].includes(
+                    t.name,
+                  );
                   return (
                     <div
                       key={t.name}
                       className={`p-2 rounded-xl border text-[11px] ${
-                        isResume ? 'bg-indigo-950/30 border-indigo-500/40 text-indigo-300' : 'bg-slate-950 border-slate-800 text-slate-300'
+                        isDynamic ? 'bg-indigo-950/30 border-indigo-500/40 text-indigo-300' : 'bg-slate-950 border-slate-800 text-slate-300'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-emerald-400">{t.name}()</span>
-                        <span className="text-[10px] text-slate-500">{isResume ? '⚡ Dynamic (Resumable)' : 'Base'}</span>
+                        <span className="text-[10px] text-slate-500">{isDynamic ? '⚡ Dynamic' : 'Base'}</span>
                       </div>
                       <p className="text-[10px] text-slate-400 mt-0.5">{t.description}</p>
                     </div>

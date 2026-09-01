@@ -137,6 +137,37 @@ app.post('/api/demo/intents/:intentId/resume', (req, res) => {
   }
 });
 
+app.post('/api/demo/intents/:intentId/alternate-route', async (req, res) => {
+  try {
+    const issuedVia = req.body?.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user';
+    res.json(
+      await demoStore.grantAlternateAccess(getDemoSessionId(req), req.params.intentId, issuedVia),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/demo/intents/:intentId/alternate-route/revoke', (req, res) => {
+  try {
+    const reason = String(req.body?.reason || '').slice(0, 200) || 'No reason supplied.';
+    res.json(demoStore.revokeAlternateAccess(getDemoSessionId(req), req.params.intentId, reason));
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+// Deliberately unauthenticated: the recipient holds a scoped capability token,
+// not a session. Authority comes from the token's scope, expiry, and revocation.
+app.get('/api/demo/invoice-access/:token', async (req, res) => {
+  try {
+    const result = await demoStore.readInvoiceByAccessToken(String(req.params.token));
+    res.status(result.success ? 200 : 403).json(result);
+  } catch {
+    res.status(403).json({ success: false, error: 'This share link is not valid.' });
+  }
+});
+
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 const distDirectory = path.resolve(serverDirectory, '../dist');
 if (existsSync(distDirectory)) {
