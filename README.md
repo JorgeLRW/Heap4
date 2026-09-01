@@ -31,6 +31,12 @@ Open `http://localhost:5173`. For native WebMCP testing, use ChatGPT's in-app br
 
 The URL receives a `session` query parameter. Keep that parameter when moving the demo between browser surfaces; it identifies the same server-side interrupted workflow without exposing user data.
 
+## Public demo
+
+The standalone free-tier deployment is available at [heap4-webmcp-demo.jorge-leonardo-ruizwilliams.workers.dev](https://heap4-webmcp-demo.jorge-leonardo-ruizwilliams.workers.dev). Its Worker and D1 configuration live in [cloudflare-demo](cloudflare-demo), separate from the original Container-capable deployment in `wrangler.jsonc`.
+
+Because Cloudflare Workers Free does not include Containers, the public demo uses an explicit edge evidence runner with fixed, allowlisted deterministic checks. The local deployment exercises the bounded process adapter, while the original Cloudflare Worker remains wired for the Container sandbox when its paid-plan bindings are configured.
+
 ## Native WebMCP acceptance flow
 
 1. Click **Reset Demo Baseline**.
