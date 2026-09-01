@@ -248,14 +248,19 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
             </div>
 
             {isReady && (
-              <button
-                onClick={deployRepair}
-                disabled={working !== null}
-                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                {working === 'deploying' ? 'Promoting validated candidate…' : 'Approve validated candidate and promote'}
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={deployRepair}
+                  disabled={working !== null}
+                  className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  {working === 'deploying' ? 'Promoting validated candidate…' : 'Approve validated candidate and promote'}
+                </button>
+                <p className="text-[10px] text-amber-300/80 text-center">
+                  Human-only action. No registered WebMCP tool can promote a build, so the agent cannot reach this even if it asks.
+                </p>
+              </div>
             )}
 
             {isDeployed && repairJob.deploymentEvidence && (
