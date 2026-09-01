@@ -28,7 +28,7 @@ This is the part that is native to WebMCP and impossible in a static tool manife
 | `resumable` — repair deployed | absent | **registered** | **registered** |
 | `completed` — nothing outstanding | absent | absent | absent |
 
-The agent never has to guess whether an action is allowed. If the server would refuse it, the tool is not there. `deliver_by_alternate_route` withdraws itself the instant a link exists, so an agent cannot issue two. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
+The agent normally cannot discover an action that is invalid for the current state. Stale tool handles and race conditions remain possible, so every mutation still needs server-side enforcement. `deliver_by_alternate_route` withdraws itself after a link exists, while the server also rejects duplicate issuance. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
 
 ## The vertical slice
 
@@ -77,7 +77,7 @@ Not a decorative URL. The alternate route mints a bearer token that is:
 
 ## Why WebMCP and not a scraper or a server connector
 
-The data never leaves the origin. WebMCP invokes the tool callback *inside the page's own authenticated context*, so the invoice, the customer, the stack trace, and the source location are read by the page and returned as structured results. There is no third-party server holding a copy, no credential handed to an agent vendor, and no scraped DOM snapshot of the user's account.
+The tool executes *inside the site's authenticated context*, so credentials and raw application state do not need to be exported to a separate MCP server. The agent still receives whatever structured result the tool returns, and the share link intentionally grants controlled access to its recipient.
 
 That has three consequences worth stating plainly:
 
@@ -85,7 +85,7 @@ That has three consequences worth stating plainly:
 - **A server-side MCP connector cannot do this cheaply.** It needs its own credentials, its own copy of the data, and its own authorization model. Here the browser already has the user's session, and the site already knows what the user is allowed to do.
 - **Nothing is retained for training.** State stays in the user's session record and is discarded on reset. The site chooses what to expose per tool call; the plaintext share URL, for example, is returned once and excluded from the audit log.
 
-The tool surface is also the privacy boundary. Because tools are registered only while the server would authorize them, "what the agent can see" and "what the user is entitled to" are the same list.
+The tool surface is an authorization-aware discovery boundary, not the enforcement boundary. Because tools are registered from server-authoritative state, the agent normally discovers only actions relevant to the current state; server-side checks still decide whether a stale or racing call succeeds.
 
 ## Authority boundaries
 

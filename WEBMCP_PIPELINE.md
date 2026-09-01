@@ -70,24 +70,28 @@ reports that agent discovery is unavailable.
 ## The data boundary
 
 WebMCP is chosen here for a structural reason, not a cosmetic one: the tool
-callback runs in the page's own authenticated context, so the user's data is
-never copied out of the origin to reach the agent.
+executes inside the site's authenticated context, so credentials and raw
+application state do not need to be exported to a separate MCP server. The
+agent still receives whatever structured result the tool returns, and the share
+link intentionally grants controlled access to its recipient.
 
 - The page reads the invoice, failure capsule, and source context with the
   session the user already has.
 - The agent receives only the structured result the site chose to return for
   that specific tool call.
-- No agent vendor holds credentials for this application, and no third-party
-  server retains a copy of the workflow state.
-- Nothing is persisted for training. Session state lives in the demo session
-  record and is discarded on reset.
+- The application does not hand an agent vendor credentials or require a
+  separate connector to hold raw workflow state.
+- This demo does not use session state as training data. Session state lives in
+  the demo session record and is discarded on reset.
 
 Two things follow. First, each tool result is an explicit disclosure decision:
 `inspect_intent` returns the grant's metadata but never its `tokenHash`, and
 `deliver_by_alternate_route` strips the plaintext URL from the audit log.
-Second, the dynamic surface *is* the privacy boundary — because a tool is
-registered only while the server would authorize it, the set of things the agent
-can do is the same as the set of things the user is entitled to.
+Second, the dynamic surface is an authorization-aware discovery boundary, not
+the enforcement boundary. Because tools are registered from server-authoritative
+state, the agent normally discovers only actions relevant to the current state;
+stale tool handles and race conditions remain possible, so server-side checks
+still decide whether a call succeeds.
 
 An agent that drove the DOM instead would be limited to what happens to be
 rendered, and a server-side connector would need its own credentials, its own
@@ -108,8 +112,9 @@ written as a pure projection of server-authoritative state onto a tool list:
 
 The properties this buys:
 
-- An agent is never offered an action the server would reject, so there is no
-  class of "tool call that always fails".
+- The agent normally cannot discover an action that is invalid for the current
+  state. Stale tool handles and race conditions remain possible, so every
+  mutation still needs server-side enforcement.
 - Issuing a share link withdraws the issuing capability, so double-issuance is
   structurally impossible rather than merely validated.
 - The revoke capability outlives completion, so a workaround is always
