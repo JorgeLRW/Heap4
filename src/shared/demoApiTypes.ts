@@ -50,7 +50,7 @@ export interface ValidationCheck {
   detail: string;
 }
 
-export type RepairExecutionMode = 'pending' | 'cloudflare_vm' | 'local_bounded_process';
+export type RepairExecutionMode = 'pending' | 'cloudflare_vm' | 'local_bounded_process' | 'edge_deterministic';
 
 export interface RepairCommandEvidence {
   id: string;

@@ -90,6 +90,8 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
             <span className="font-mono text-emerald-300">
               {execution?.mode === 'cloudflare_vm'
                 ? 'isolated VM'
+                : execution?.mode === 'edge_deterministic'
+                  ? 'edge evidence runner'
                 : execution?.mode === 'local_bounded_process'
                   ? 'bounded local process'
                   : 'awaiting executor'}
@@ -144,13 +146,15 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">
-                <div className="flex items-center gap-2 text-slate-300 font-semibold"><FlaskConical className="w-3.5 h-3.5 text-cyan-400" /> Sandbox scope</div>
+                <div className="flex items-center gap-2 text-slate-300 font-semibold"><FlaskConical className="w-3.5 h-3.5 text-cyan-400" /> {execution?.mode === 'edge_deterministic' ? 'Edge verifier scope' : 'Sandbox scope'}</div>
                 <div className="text-slate-500">{repairJob.sandbox.instanceClass} · {repairJob.sandbox.sourceRevision}</div>
                 <div className="font-mono text-slate-400 break-all">{repairJob.sandbox.workspace}</div>
                 <div className="text-slate-400">{repairJob.sandbox.fileScope.length} writable files · {repairJob.sandbox.validationScope.length} validation targets</div>
                 <div className="text-emerald-400">
                   {execution?.mode === 'cloudflare_vm'
                     ? 'Public internet disabled · no credentials in VM'
+                    : execution?.mode === 'edge_deterministic'
+                      ? 'Allowlisted deterministic checks · no container or credentials'
                     : 'Fixed argv only · reduced environment · no inherited secrets'}
                 </div>
                 <div className="text-slate-500">
@@ -196,7 +200,7 @@ export const DeveloperRepairPanel: React.FC<DeveloperRepairPanelProps> = ({ isOp
               </div>
 
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
-                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Executable evidence</div>
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{execution?.mode === 'edge_deterministic' ? 'Validation evidence' : 'Executable evidence'}</div>
                 {!execution?.commands.length && (
                   <div className="text-[11px] text-slate-500">Waiting for the sandbox to emit command results.</div>
                 )}

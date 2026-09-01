@@ -372,6 +372,9 @@ export async function executeRepairPipeline(
 ): Promise<RepairJob> {
   const job = clone(initialJob);
   let failure: Error | null = null;
+  const verifierLabel = adapter.executionMode === 'edge_deterministic'
+    ? 'the deterministic edge verifier'
+    : 'the real failure reproducer';
 
   job.status = 'diagnosing';
   job.stageProgress = 8;
@@ -402,7 +405,7 @@ export async function executeRepairPipeline(
       job.artifact.validationChecks,
       'reproducer',
       'passed',
-      `Captured exit 0 from the real failure reproducer (evidence ${reproducer.digest.slice(0, 12)}).`,
+      `Captured exit 0 from ${verifierLabel} (evidence ${reproducer.digest.slice(0, 12)}).`,
     );
     job.sandbox.execution.baseDigest = await sha256(BASE_DELIVERY_SOURCE);
     job.currentStage = 'reproduction_confirmed';
@@ -487,7 +490,7 @@ export async function executeRepairPipeline(
     );
     job.agent.events.push({
       stage: 'verified',
-      message: 'Every executable check passed and the scope audit found no out-of-policy mutation.',
+      message: `${adapter.executionMode === 'edge_deterministic' ? 'Every deterministic edge check' : 'Every executable check'} passed and the scope audit found no out-of-policy mutation.`,
       timestamp: now(),
       evidenceId: job.sandbox.execution.workspaceDigest,
     });
