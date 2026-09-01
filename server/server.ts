@@ -11,7 +11,25 @@ const httpServer = createServer(app);
 const demoStore = new DemoStore();
 const port = Number(process.env.PORT || 3001);
 
-app.use(cors());
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3001')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Same-origin browser requests and non-browser clients omit the Origin header.
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin ${origin} is not allowed to call this API.`));
+    },
+  }),
+);
 app.use(express.json({ limit: '256kb' }));
 
 function getDemoSessionId(req: express.Request): string {
