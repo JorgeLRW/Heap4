@@ -36,6 +36,14 @@ interface RecoveryDrawerProps {
   agentFocus?: AgentUiFocus | null;
 }
 
+const DYNAMIC_SURFACE_TOOL_NAMES = [
+  'deliver_by_alternate_route',
+  'revoke_alternate_delivery',
+  'resume_intent',
+] as const;
+
+type DynamicSurfaceToolName = (typeof DYNAMIC_SURFACE_TOOL_NAMES)[number];
+
 export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   capsule,
   isOpen,
@@ -96,6 +104,39 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
   const issuedAccessUrl = intentRuntime.getLastIssuedAccessUrl();
   const primaryRouteHealthy = intentRuntime.getCurrentBuild() === 'demo-build-b';
+  const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
+  const registeredDynamicToolNames = DYNAMIC_SURFACE_TOOL_NAMES.filter((toolName) => registeredToolNames.has(toolName));
+
+  let previousSurfaceLabel = 'Healthy';
+  let expectedPreviousDynamicTools: DynamicSurfaceToolName[] = [];
+  let expectedCurrentDynamicTools: DynamicSurfaceToolName[] = [];
+  if (isBlocked) {
+    previousSurfaceLabel = 'Healthy';
+    expectedCurrentDynamicTools = ['deliver_by_alternate_route'];
+  } else if (isMitigated) {
+    previousSurfaceLabel = 'Blocked';
+    expectedPreviousDynamicTools = ['deliver_by_alternate_route'];
+    expectedCurrentDynamicTools = ['revoke_alternate_delivery'];
+  } else if (isResumable) {
+    previousSurfaceLabel = hasUsableGrant ? 'Mitigated' : 'Blocked';
+    expectedPreviousDynamicTools = hasUsableGrant ? ['revoke_alternate_delivery'] : [];
+    expectedCurrentDynamicTools = hasUsableGrant
+      ? ['revoke_alternate_delivery', 'resume_intent']
+      : ['resume_intent'];
+  } else if (isCompleted) {
+    previousSurfaceLabel = 'Resumable';
+    expectedPreviousDynamicTools = hasUsableGrant
+      ? ['revoke_alternate_delivery', 'resume_intent']
+      : ['resume_intent'];
+    expectedCurrentDynamicTools = hasUsableGrant ? ['revoke_alternate_delivery'] : [];
+  }
+
+  const currentDynamicToolNames = registeredTools.length > 0
+    ? registeredDynamicToolNames
+    : expectedCurrentDynamicTools;
+  const currentSurfaceLabel = registeredTools.length > 0 ? 'Now' : 'Expected now';
+  const addedDynamicTools = currentDynamicToolNames.filter((toolName) => !expectedPreviousDynamicTools.includes(toolName));
+  const removedDynamicTools = expectedPreviousDynamicTools.filter((toolName) => !currentDynamicToolNames.includes(toolName));
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[3px] transition-opacity animate-fade-in text-slate-100 font-sans">
@@ -498,8 +539,9 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-[11px]">
               <span className="text-emerald-400 font-bold block">WebMCP Dynamic Tool Surface:</span>
               <p className="text-slate-300 text-[10px] font-sans">
-                The tool list is a function of server-authoritative state, not a fixed manifest. A
-                capability is registered exactly while the server would authorize it.
+                The tool list is a function of server-authoritative state, not a fixed manifest. The
+                agent normally cannot discover an action invalid for the current state; the server
+                still enforces every call.
               </p>
               <div className="pt-1 space-y-0.5 text-[10px] font-mono text-slate-400">
                 <div>
@@ -521,6 +563,52 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   </span>
                 </div>
               </div>
+            </div>
+
+            <div className="p-3 bg-slate-950 rounded-xl border border-emerald-500/30 space-y-2.5 text-[10px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-emerald-300 font-bold uppercase tracking-wider">Capability transition</span>
+                <span className="text-slate-500 font-mono">{currentIntent.status}</span>
+              </div>
+              <p className="text-slate-400 font-sans leading-relaxed">
+                Watch the state change the agent's available actions. Base tools stay registered; only the dynamic surface is compared here.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {[{
+                  label: `Before · ${previousSurfaceLabel}`,
+                  toolNames: expectedPreviousDynamicTools,
+                  tone: 'border-slate-800 bg-slate-900/60',
+                  nameTone: 'text-slate-400',
+                }, {
+                  label: `Current · ${currentSurfaceLabel}`,
+                  toolNames: currentDynamicToolNames,
+                  tone: 'border-emerald-500/30 bg-emerald-950/20',
+                  nameTone: 'text-emerald-300',
+                }].map((surface) => (
+                  <div key={surface.label} className={`rounded-lg border p-2 space-y-1.5 ${surface.tone}`}>
+                    <div className="text-[9px] uppercase tracking-wider text-slate-500">{surface.label}</div>
+                    {DYNAMIC_SURFACE_TOOL_NAMES.map((toolName) => {
+                      const isRegistered = surface.toolNames.includes(toolName);
+                      return (
+                        <div key={toolName} className="flex items-start gap-1.5 leading-tight">
+                          <span className={isRegistered ? 'text-emerald-400' : 'text-slate-700'}>{isRegistered ? '●' : '○'}</span>
+                          <span className={isRegistered ? surface.nameTone : 'text-slate-600'}>{toolName}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+              {(addedDynamicTools.length > 0 || removedDynamicTools.length > 0) && (
+                <div className="text-[10px] font-sans text-slate-400">
+                  {addedDynamicTools.length > 0 && (
+                    <span>Appeared: <strong className="text-emerald-300">{addedDynamicTools.join(', ')}</strong>. </span>
+                  )}
+                  {removedDynamicTools.length > 0 && (
+                    <span>Withdrawn: <strong className="text-amber-300">{removedDynamicTools.join(', ')}</strong>.</span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
