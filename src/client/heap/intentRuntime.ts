@@ -10,9 +10,20 @@ import { httpDemoApi } from './demoApi';
 import type { Intent, ToolActivityRecord } from './intentTypes';
 import { onIntentStatusChange } from '../webmcp/registerTools';
 
+/** A request from an agent tool call to move the human UI to the relevant surface. */
+export interface AgentUiFocus {
+  target: 'recovery_drawer' | 'repair_panel';
+  intentId: string;
+  highlight?: 'failure_source' | 'sandbox_evidence' | 'verification';
+  toolName: string;
+  at: number;
+}
+
 export class IntentRuntime {
   private intents = new Map<string, Intent>();
   private listeners = new Set<() => void>();
+  private focusListeners = new Set<(focus: AgentUiFocus) => void>();
+  private lastAgentUiFocus: AgentUiFocus | null = null;
   private toolLogs: ToolActivityRecord[] = [];
   private currentBuild: DemoBuild = 'demo-build-a';
   private repairJob: RepairJob | null = null;
@@ -142,6 +153,7 @@ export class IntentRuntime {
 
   public async resetDemo(): Promise<void> {
     this.toolLogs = [];
+    this.lastAgentUiFocus = null;
     this.stopRepairPolling();
     this.applyServerState(await this.api.reset());
     await onIntentStatusChange(null);
@@ -150,6 +162,22 @@ export class IntentRuntime {
   public subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Lets an agent tool call actuate the human UI instead of only returning JSON. */
+  public requestAgentUiFocus(focus: Omit<AgentUiFocus, 'at'>): void {
+    const enriched: AgentUiFocus = { ...focus, at: Date.now() };
+    this.lastAgentUiFocus = enriched;
+    this.focusListeners.forEach((listener) => listener(enriched));
+  }
+
+  public getLastAgentUiFocus(): AgentUiFocus | null {
+    return this.lastAgentUiFocus;
+  }
+
+  public subscribeAgentUiFocus(listener: (focus: AgentUiFocus) => void): () => void {
+    this.focusListeners.add(listener);
+    return () => this.focusListeners.delete(listener);
   }
 
   private applyServerState(state: DemoSessionState): void {

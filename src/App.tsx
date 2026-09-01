@@ -4,13 +4,14 @@ import { RecoveryDrawer } from './components/RecoveryDrawer';
 import { DeveloperRepairPanel } from './components/DeveloperRepairPanel';
 import { Intent } from './client/heap/intentTypes';
 import { initializeWebMCPTools } from './client/webmcp/registerTools';
-import { intentRuntime } from './client/heap/intentRuntime';
+import { intentRuntime, AgentUiFocus } from './client/heap/intentRuntime';
 
 export const App: React.FC = () => {
   const [activeDrawerCapsule, setActiveDrawerCapsule] = useState<Intent | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isRepairPanelOpen, setIsRepairPanelOpen] = useState(false);
   const [webMcpAvailable, setWebMcpAvailable] = useState<boolean | null>(null);
+  const [agentFocus, setAgentFocus] = useState<AgentUiFocus | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -29,11 +30,26 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // A WebMCP tool call moves the human UI to the surface the agent is acting on.
+  useEffect(
+    () =>
+      intentRuntime.subscribeAgentUiFocus((focus) => {
+        if (focus.target === 'repair_panel') {
+          setIsRepairPanelOpen(true);
+          return;
+        }
+        const intent = intentRuntime.getIntent(focus.intentId);
+        if (intent) setActiveDrawerCapsule(intent);
+        setAgentFocus(focus);
+        setIsDrawerOpen(true);
+      }),
+    []
+  );
+
   const handleOpenRecoveryDrawer = (capsule: Intent) => {
     setActiveDrawerCapsule(capsule);
     setIsDrawerOpen(true);
   };
-
   const handleCloseDrawer = () => {
     setIsDrawerOpen(false);
   };
@@ -60,6 +76,7 @@ export const App: React.FC = () => {
         isOpen={isDrawerOpen}
         onClose={handleCloseDrawer}
         onOpenRepairPanel={handleOpenRepairPanel}
+        agentFocus={agentFocus}
       />
 
       {/* Demo Developer Repair Panel (§8) */}

@@ -23,7 +23,7 @@ import {
   Cpu,
   FileCode2
 } from 'lucide-react';
-import { intentRuntime } from '../client/heap/intentRuntime';
+import { intentRuntime, AgentUiFocus } from '../client/heap/intentRuntime';
 import { Intent, ToolActivityRecord } from '../client/heap/intentTypes';
 import { getRegisteredToolsSnapshot, subscribeRegisteredTools } from '../webmcp/modelContext';
 
@@ -33,6 +33,7 @@ interface RecoveryDrawerProps {
   onClose: () => void;
   onRecovered?: (intentId: string) => void;
   onOpenRepairPanel?: () => void;
+  agentFocus?: AgentUiFocus | null;
 }
 
 export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
@@ -41,10 +42,23 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   onClose,
   onRecovered,
   onOpenRepairPanel,
+  agentFocus,
 }) => {
   const [activeTab, setActiveTab] = useState<'recovery' | 'policy' | 'evidence' | 'webmcp'>('recovery');
   const [registeredTools, setRegisteredTools] = useState<any[]>([]);
   const [toolLogs, setToolLogs] = useState<ToolActivityRecord[]>([]);
+  const [sourcePulse, setSourcePulse] = useState(false);
+
+  useEffect(() => {
+    if (!agentFocus) return;
+    if (agentFocus.highlight === 'failure_source') {
+      setActiveTab('evidence');
+      setSourcePulse(true);
+      const timer = setTimeout(() => setSourcePulse(false), 2600);
+      return () => clearTimeout(timer);
+    }
+    if (agentFocus.highlight === 'verification') setActiveTab('recovery');
+  }, [agentFocus?.at]);
 
   useEffect(() => {
     const updateLogs = () => {
@@ -337,12 +351,20 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
 
             {/* Resolved Source Code Snippet (§4) */}
             {currentIntent.runtimeContext?.source && (
-              <div className="space-y-1.5">
+              <div
+                className={`space-y-1.5 rounded-xl transition-all ${
+                  sourcePulse ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-[#0d121f] animate-pulse' : ''
+                }`}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">
                     Source Code Context ({currentIntent.runtimeContext.source.file}:{currentIntent.runtimeContext.source.line})
                   </span>
-                  <span className="text-[10px] text-indigo-400">{currentIntent.runtimeContext.source.linesRange}</span>
+                  {sourcePulse ? (
+                    <span className="text-[10px] text-indigo-300 font-mono">● agent is reading this</span>
+                  ) : (
+                    <span className="text-[10px] text-indigo-400">{currentIntent.runtimeContext.source.linesRange}</span>
+                  )}
                 </div>
                 <pre className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[10px] text-emerald-300 overflow-x-auto leading-relaxed">
                   {currentIntent.runtimeContext.source.snippet}

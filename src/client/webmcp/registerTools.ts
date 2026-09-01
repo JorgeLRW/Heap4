@@ -16,6 +16,23 @@ import type { Intent } from '../heap/intentTypes';
 let baseRegistrationPromise: Promise<void> | null = null;
 let resumeAbortController: AbortController | null = null;
 
+/** Structured failure payload so the agent can self-correct within one roundtrip. */
+function toolError(
+  code: string,
+  message: string,
+  recovery: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { ok: false, error: code, message, ...recovery };
+}
+
+function intentNotFound(intentId: string): Record<string, unknown> {
+  return toolError('intent_not_found', `No interrupted workflow is tracked under "${intentId}".`, {
+    requestedIntentId: intentId,
+    validIntentIds: intentRuntime.getAllIntents().map((intent) => intent.id),
+    recoveryHint: 'Call list_active_intents to obtain a currently tracked intentId.',
+  });
+}
+
 async function refreshAndGetIntent(intentId: string) {
   await intentRuntime.refreshFromServer();
   return intentRuntime.getIntent(intentId);
@@ -75,6 +92,15 @@ export function initializeWebMCPTools(): Promise<void> {
         const startedAt = performance.now();
         const id = String(intentId);
         const intent = await refreshAndGetIntent(id);
+        if (intent) {
+          // Move the human UI to the same failing source line the agent is reading.
+          intentRuntime.requestAgentUiFocus({
+            target: 'recovery_drawer',
+            intentId: id,
+            highlight: 'failure_source',
+            toolName: 'inspect_intent',
+          });
+        }
         const result = intent
           ? {
               intentId: intent.id,
@@ -87,7 +113,7 @@ export function initializeWebMCPTools(): Promise<void> {
               failure: intent.runtimeContext,
               repair: intentRuntime.getRepairJob(),
             }
-          : { error: `Intent ${id} was not found.` };
+          : intentNotFound(id);
         intentRuntime.logToolCall(
           'inspect_intent',
           { intentId: id },
@@ -116,21 +142,42 @@ export function initializeWebMCPTools(): Promise<void> {
       execute: async ({ intentId, text }) => {
         const startedAt = performance.now();
         const id = String(intentId);
-        const updated = await intentRuntime.appendIntentContext(id, String(text), 'agent');
-        const result = {
+        const note = String(text ?? '');
+        const logAndReturn = (payload: Record<string, unknown>) => {
+          intentRuntime.logToolCall(
+            'add_user_context',
+            { intentId: id, text: note },
+            payload,
+            Math.max(1, Math.round(performance.now() - startedAt)),
+            false,
+          );
+          return payload;
+        };
+
+        if (note.trim().length === 0 || note.length > 500) {
+          return logAndReturn(
+            toolError('invalid_argument', 'Context text must be between 1 and 500 characters.', {
+              field: 'text',
+              validLength: [1, 500],
+              receivedLength: note.length,
+            }),
+          );
+        }
+
+        if (!(await refreshAndGetIntent(id))) return logAndReturn(intentNotFound(id));
+
+        const updated = await intentRuntime.appendIntentContext(id, note, 'agent');
+        intentRuntime.requestAgentUiFocus({
+          target: 'recovery_drawer',
+          intentId: id,
+          toolName: 'add_user_context',
+        });
+        return logAndReturn({
           intentId: id,
           accepted: true,
           context: updated.userContext?.at(-1),
           message: 'Context attached to the engineering packet.',
-        };
-        intentRuntime.logToolCall(
-          'add_user_context',
-          { intentId: id, text: String(text) },
-          result,
-          Math.max(1, Math.round(performance.now() - startedAt)),
-          false,
-        );
-        return result;
+        });
       },
     });
 
@@ -150,20 +197,36 @@ export function initializeWebMCPTools(): Promise<void> {
       execute: async ({ intentId }) => {
         const startedAt = performance.now();
         const id = String(intentId);
-        await intentRuntime.refreshFromServer();
-        const repairJob = await intentRuntime.requestRepair(id);
-        const result = {
-          repairJob,
-          message: 'A reviewable patch was proposed. Explicit deployment approval is still required.',
+        const logAndReturn = (payload: Record<string, unknown>) => {
+          intentRuntime.logToolCall(
+            'request_repair',
+            { intentId: id },
+            payload,
+            Math.max(1, Math.round(performance.now() - startedAt)),
+            false
+          );
+          return payload;
         };
-        intentRuntime.logToolCall(
-          'request_repair',
-          { intentId: id },
-          result,
-          Math.max(1, Math.round(performance.now() - startedAt)),
-          false
-        );
-        return result;
+
+        if (!(await refreshAndGetIntent(id))) return logAndReturn(intentNotFound(id));
+
+        const repairJob = await intentRuntime.requestRepair(id);
+        // Surface the sandbox transcript in the human review panel as it runs.
+        intentRuntime.requestAgentUiFocus({
+          target: 'repair_panel',
+          intentId: id,
+          highlight: 'sandbox_evidence',
+          toolName: 'request_repair',
+        });
+        return logAndReturn({
+          repairJob,
+          message:
+            repairJob.status === 'ready_for_review'
+              ? 'The sandbox produced a validated artifact. Explicit deployment approval is still required.'
+              : repairJob.status === 'failed'
+                ? 'The sandbox stopped safely. Inspect executable evidence before retrying.'
+                : 'The bounded repair worker is executing. Poll get_repair_status for command evidence.',
+        });
       },
     });
 
@@ -171,7 +234,7 @@ export function initializeWebMCPTools(): Promise<void> {
       name: 'get_repair_status',
       title: 'Get Repair Status',
       description:
-        'Check whether engineering has proposed and deployed a repair for an interrupted workflow, and whether the workflow is now resumable.',
+        'Check repair progress, sandbox command evidence, cleanup state, deployment state, and whether the interrupted workflow is resumable.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -184,13 +247,15 @@ export function initializeWebMCPTools(): Promise<void> {
         const startedAt = performance.now();
         const id = String(intentId);
         const intent = await refreshAndGetIntent(id);
-        const result = {
-          intentId: id,
-          intentStatus: intent?.status || 'not_found',
-          build: intentRuntime.getCurrentBuild(),
-          repairJob: intentRuntime.getRepairJob(),
-          resumable: intent?.status === 'resumable',
-        };
+        const result = intent
+          ? {
+              intentId: id,
+              intentStatus: intent.status,
+              build: intentRuntime.getCurrentBuild(),
+              repairJob: intentRuntime.getRepairJob(),
+              resumable: intent.status === 'resumable',
+            }
+          : intentNotFound(id);
         intentRuntime.logToolCall(
           'get_repair_status',
           { intentId: id },
@@ -219,13 +284,30 @@ export function initializeWebMCPTools(): Promise<void> {
         const startedAt = performance.now();
         const id = String(intentId);
         const intent = await refreshAndGetIntent(id);
+        if (!intent) {
+          const missing = intentNotFound(id);
+          intentRuntime.logToolCall(
+            'verify_intent',
+            { intentId: id },
+            missing,
+            Math.max(1, Math.round(performance.now() - startedAt)),
+            true
+          );
+          return missing;
+        }
         const goalSatisfied = Boolean(
-          intent?.status === 'completed' && intent.progress.deliveryCompleted
+          intent.status === 'completed' && intent.progress.deliveryCompleted
         );
+        intentRuntime.requestAgentUiFocus({
+          target: 'recovery_drawer',
+          intentId: id,
+          highlight: 'verification',
+          toolName: 'verify_intent',
+        });
         const result = {
           intentId: id,
           goalSatisfied,
-          successCondition: intent?.goal.successCondition,
+          successCondition: intent.goal.successCondition,
           invoiceCreateCount: intentRuntime.getInvoiceCreateCount(),
           invariantsPreserved: intentRuntime.getInvoiceCreateCount() === 1,
         };
@@ -282,7 +364,21 @@ export async function onIntentStatusChange(intent: Intent | null): Promise<void>
         execute: async ({ intentId }) => {
           const startedAt = performance.now();
           const id = String(intentId);
-          await intentRuntime.refreshFromServer();
+          const current = await refreshAndGetIntent(id);
+          if (!current) return intentNotFound(id);
+          if (current.status !== 'resumable') {
+            return toolError(
+              'intent_not_resumable',
+              'The server only resumes an intent after an approved repair is deployed.',
+              {
+                intentId: id,
+                currentStatus: current.status,
+                requiredStatus: 'resumable',
+                recoveryHint: 'Call get_repair_status and wait for an approved deployment.',
+              },
+            );
+          }
+
           const result = await intentRuntime.resumeIntent(id);
           intentRuntime.logToolCall(
             'resume_intent',
@@ -291,6 +387,12 @@ export async function onIntentStatusChange(intent: Intent | null): Promise<void>
             Math.max(1, Math.round(performance.now() - startedAt)),
             false
           );
+          intentRuntime.requestAgentUiFocus({
+            target: 'recovery_drawer',
+            intentId: id,
+            highlight: 'verification',
+            toolName: 'resume_intent',
+          });
           const response = {
             success: result.success,
             intentId: id,
