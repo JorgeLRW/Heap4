@@ -20,13 +20,13 @@ outcome:  Acme Corp can read invoice INV-2841
 
 This is the part that is native to WebMCP and impossible in a static tool manifest. Heap 4's registered tools are a pure function of server state:
 
-| Server state | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
-| --- | :---: | :---: | :---: |
-| `active` — nothing wrong | absent | absent | absent |
-| `blocked` — primary route broken | **registered** | absent | absent |
-| `mitigated` — link live, defect open | absent | **registered** | absent |
-| `resumable` — repair deployed | absent | **registered** | **registered** |
-| `completed` — nothing outstanding | absent | absent | absent |
+| Server state | `get_recovery_options` | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
+| --- | :---: | :---: | :---: | :---: |
+| `active` — nothing wrong | absent | absent | absent | absent |
+| `blocked` — primary route broken | **registered** | **registered** | absent | absent |
+| `mitigated` — link live, defect open | absent | absent | **registered** | absent |
+| `resumable` — repair deployed | absent | absent | **registered** | **registered** |
+| `completed` — nothing outstanding | absent | absent | absent | absent |
 
 The agent normally cannot discover an action that is invalid for the current state. Stale tool handles and race conditions remain possible, so every mutation still needs server-side enforcement. `deliver_by_alternate_route` withdraws itself after a link exists, while the server also rejects duplicate issuance. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
 
@@ -36,7 +36,7 @@ The agent normally cannot discover an action that is invalid for the current sta
 2. The server persists exactly one invoice, then executes a reproducible delivery-provider defect and returns HTTP 500.
 3. Heap 4 stores the outcome, the routes that could reach it, partial progress, request ID, build, stack, source location, and protected invariants.
 4. A browser agent enters cold, discovers the interrupted workflow, and finds it can act — not just report.
-5. **Route A (seconds, no engineer):** the agent calls `deliver_by_alternate_route`. The server mints a scoped, expiring, revocable share link. Acme can read the invoice now. The invoice is *not* marked sent, the amount is untouched, no second invoice exists, and the defect is still open. The intent becomes `mitigated`, not `completed`.
+5. **Route A (seconds, user-confirmed):** the agent calls `get_recovery_options`, explains the safe route, and receives the user's explicit confirmation. It then calls `deliver_by_alternate_route`. The server records the approved route but not the user's words, and mints a scoped, expiring, revocable share link. Acme can read the invoice now. The invoice is *not* marked sent, the amount is untouched, no second invoice exists, and the defect is still open. The intent becomes `mitigated`, not `completed`.
 6. **Route B (in parallel):** a bounded repair job reproduces the failure in a job-scoped sandbox, produces a patch, runs the affected checks and a write-scope audit, and waits at `ready_for_review`.
 7. A human reviews the validated artifact and promotes the candidate.
 8. `resume_intent` appears. The agent runs only the missing delivery step and verifies the invoice was sent without duplication.
@@ -59,7 +59,8 @@ Base surface, always registered:
 
 Dynamic surface, registered only while the server would authorize it:
 
-- `deliver_by_alternate_route` — reach the outcome another way while the primary route is broken.
+- `get_recovery_options` — explain the outcome, approved recovery routes, constraints, and confirmation requirement without making a change.
+- `deliver_by_alternate_route` — after explicit user confirmation, reach the outcome another way while the primary route is broken.
 - `revoke_alternate_delivery` — withdraw the workaround capability.
 - `resume_intent` — run only the unfinished step after an approved repair is deployed.
 

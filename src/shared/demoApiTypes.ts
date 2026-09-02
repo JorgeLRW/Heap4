@@ -64,6 +64,14 @@ export interface InvoiceAccessView {
   scope: 'read_invoice_only';
 }
 
+/** Minimal record of the confirmation supplied in the user's agent conversation. */
+export interface RecoveryApproval {
+  intentId: string;
+  route: 'secure_share_link';
+  confirmedAt: string;
+  channel: 'webmcp_agent_conversation' | 'user_interface';
+}
+
 export interface RepairArtifact {
   file: string;
   summary: string;
@@ -173,12 +181,14 @@ export interface DemoSessionState {
   invoiceCreateCount: number;
   repairJob: RepairJob | null;
   accessGrant: InvoiceAccessGrant | null;
+  recoveryApproval: RecoveryApproval | null;
 }
 
 export interface AlternateRouteResult {
   success: boolean;
   state: DemoSessionState;
   grant: InvoiceAccessGrant;
+  approval: RecoveryApproval;
   /** Returned once, at issue time, and never persisted in plaintext. */
   accessUrl: string;
 }
@@ -191,7 +201,11 @@ export interface DemoApi {
   appendIntentContext(intentId: string, text: string, source?: 'user' | 'agent'): Promise<{ success: boolean; state: DemoSessionState }>;
   deployRepair(jobId: string): Promise<{ success: boolean; state: DemoSessionState }>;
   resumeIntent(intentId: string): Promise<{ success: boolean; state: DemoSessionState }>;
-  grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user'): Promise<AlternateRouteResult>;
+  grantAlternateAccess(
+    intentId: string,
+    issuedVia: 'webmcp_agent' | 'user',
+    userConfirmation: string,
+  ): Promise<AlternateRouteResult>;
   revokeAlternateAccess(intentId: string, reason: string): Promise<{ success: boolean; state: DemoSessionState }>;
   readInvoiceByAccessToken(token: string): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }>;
 }

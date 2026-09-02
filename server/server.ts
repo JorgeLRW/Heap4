@@ -140,8 +140,14 @@ app.post('/api/demo/intents/:intentId/resume', (req, res) => {
 app.post('/api/demo/intents/:intentId/alternate-route', async (req, res) => {
   try {
     const issuedVia = req.body?.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user';
+    const userConfirmation = String(req.body?.userConfirmation || '').slice(0, 200);
     res.json(
-      await demoStore.grantAlternateAccess(getDemoSessionId(req), req.params.intentId, issuedVia),
+      await demoStore.grantAlternateAccess(
+        getDemoSessionId(req),
+        req.params.intentId,
+        issuedVia,
+        userConfirmation,
+      ),
     );
   } catch (error) {
     sendError(res, error);

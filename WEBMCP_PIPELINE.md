@@ -61,7 +61,7 @@ that state — and, critically, a set of actions that changes with it:
 3. The agent invokes a tool through the browser-mediated
    `document.modelContext.executeTool()` path.
 4. The callback calls Heap 4's same-origin API and returns structured state.
-5. Three further tools register and deregister themselves as server state moves.
+5. Four further tools register and deregister themselves as server state moves.
 
 Heap 4 does not install a fake production `modelContext`. If the browser has no
 native WebMCP support, the application still works as a normal site and clearly
@@ -102,13 +102,13 @@ copy of the data, and its own authorization model.
 `onIntentStatusChange` is the only place dynamic registration happens, and it is
 written as a pure projection of server-authoritative state onto a tool list:
 
-| Server state | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
-| --- | :---: | :---: | :---: |
-| `active` | absent | absent | absent |
-| `blocked` | registered | absent | absent |
-| `mitigated` | absent | registered | absent |
-| `resumable` | absent | registered | registered |
-| `completed` | absent | absent | absent |
+| Server state | `get_recovery_options` | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
+| --- | :---: | :---: | :---: | :---: |
+| `active` | absent | absent | absent | absent |
+| `blocked` | registered | registered | absent | absent |
+| `mitigated` | absent | absent | registered | absent |
+| `resumable` | absent | absent | registered | registered |
+| `completed` | absent | absent | absent | absent |
 
 The properties this buys:
 
@@ -141,10 +141,20 @@ and persisted session state use the same failure boundary.
 
 ## Route A: the alternate route
 
-`deliver_by_alternate_route` mints a capability token for the existing invoice.
+`get_recovery_options` is the agent's first step. It returns the preserved
+outcome, the primary route's condition, the approved alternate's effect and
+constraints, and the fact that an explicit user confirmation is required.
+
+`deliver_by_alternate_route` mints a capability token for the existing invoice
+only after it receives a bounded confirmation statement from the user's agent
+conversation. The server persists only the route, confirmation time, and
+conversation channel; it never persists the user's raw words. This is a
+delegated-approval record, not a claim that the server independently verifies
+spoken consent.
+
 The server enforces that:
 
-- The intent is `blocked` or `mitigated`; a healthy route needs no workaround.
+- The intent is `blocked`; a healthy or already-mitigated route needs no new workaround.
 - `secure_share_link` is in the intent's `alternateRoutes` allowlist.
 - The original invoice exists, and exactly one invoice record exists.
 - No usable grant is already outstanding.

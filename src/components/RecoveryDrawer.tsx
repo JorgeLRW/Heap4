@@ -37,6 +37,7 @@ interface RecoveryDrawerProps {
 }
 
 const DYNAMIC_SURFACE_TOOL_NAMES = [
+  'get_recovery_options',
   'deliver_by_alternate_route',
   'revoke_alternate_delivery',
   'resume_intent',
@@ -112,10 +113,10 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   let expectedCurrentDynamicTools: DynamicSurfaceToolName[] = [];
   if (isBlocked) {
     previousSurfaceLabel = 'Healthy';
-    expectedCurrentDynamicTools = ['deliver_by_alternate_route'];
+    expectedCurrentDynamicTools = ['get_recovery_options', 'deliver_by_alternate_route'];
   } else if (isMitigated) {
     previousSurfaceLabel = 'Blocked';
-    expectedPreviousDynamicTools = ['deliver_by_alternate_route'];
+    expectedPreviousDynamicTools = ['get_recovery_options', 'deliver_by_alternate_route'];
     expectedCurrentDynamicTools = ['revoke_alternate_delivery'];
   } else if (isResumable) {
     previousSurfaceLabel = hasUsableGrant ? 'Mitigated' : 'Blocked';
@@ -337,6 +338,11 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                     {accessGrant.issuedVia === 'webmcp_agent' ? 'browser agent (WebMCP)' : 'user'}
                   </strong>
                 </div>
+                {intentRuntime.getRecoveryApproval() && (
+                  <div className="text-slate-300">
+                    • Confirmation: <strong className="text-emerald-300">user-confirmed in agent conversation</strong>
+                  </div>
+                )}
                 <div className="text-slate-300">
                   • State:{' '}
                   <strong className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-400'}>
@@ -545,6 +551,12 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </p>
               <div className="pt-1 space-y-0.5 text-[10px] font-mono text-slate-400">
                 <div>
+                  get_recovery_options —{' '}
+                  <span className={isBlocked ? 'text-emerald-400' : 'text-slate-500'}>
+                    {isBlocked ? 'registered' : 'absent'}
+                  </span>
+                </div>
+                <div>
                   deliver_by_alternate_route —{' '}
                   <span className={isBlocked || isMitigated ? 'text-emerald-400' : 'text-slate-500'}>
                     {hasUsableGrant ? 'withdrawn (link already live)' : isBlocked ? 'registered' : 'absent'}
@@ -617,7 +629,7 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </span>
               <div className="space-y-1.5">
                 {registeredTools.map((t) => {
-                  const isDynamic = ['resume_intent', 'deliver_by_alternate_route', 'revoke_alternate_delivery'].includes(
+                  const isDynamic = ['get_recovery_options', 'resume_intent', 'deliver_by_alternate_route', 'revoke_alternate_delivery'].includes(
                     t.name,
                   );
                   return (

@@ -52,18 +52,37 @@ async function runAlternateRouteTests() {
 
   let names = await toolNames(modelContext);
   assert(
-    names.includes('deliver_by_alternate_route'),
-    'The alternate route appears as soon as the primary route breaks',
+    names.includes('get_recovery_options') && names.includes('deliver_by_alternate_route'),
+    'The recovery plan and alternate route appear as soon as the primary route breaks',
   );
   assert(
     !names.includes('revoke_alternate_delivery') && !names.includes('resume_intent'),
     'Revoke and resume stay absent while no link exists and no repair is deployed',
   );
 
+  const plan = await modelContext.executeTool(
+    'get_recovery_options',
+    JSON.stringify({ intentId: 'int_2841' }),
+  );
+  assert(plan.outcome.includes('Acme Corp can read invoice'), 'The agent can explain the preserved outcome');
+  assert(
+    plan.approvedAlternates[0].requiresUserConfirmation === true,
+    'The recovery plan requires user confirmation before an external action',
+  );
+
+  const missingConfirmation = await modelContext.executeTool(
+    'deliver_by_alternate_route',
+    JSON.stringify({ intentId: 'int_2841', userConfirmation: '' }),
+  );
+  assert(
+    missingConfirmation.error === 'user_confirmation_required',
+    'The agent cannot issue a share link without an explicit user confirmation',
+  );
+
   // The agent reaches the outcome without waiting for engineering.
   const routeResult = await modelContext.executeTool(
     'deliver_by_alternate_route',
-    JSON.stringify({ intentId: 'int_2841' }),
+    JSON.stringify({ intentId: 'int_2841', userConfirmation: 'I approve the one-hour read-only share link.' }),
   );
   await flushSurfaceSync();
 
@@ -88,6 +107,11 @@ async function runAlternateRouteTests() {
   assert(
     mitigated.accessGrant !== null && !('token' in (mitigated.accessGrant as object)),
     'Only the token digest is persisted server-side',
+  );
+  assert(
+    mitigated.recoveryApproval?.route === 'secure_share_link' &&
+      mitigated.recoveryApproval.channel === 'webmcp_agent_conversation',
+    'The server records the confirmed route without persisting the user’s words',
   );
   assert(
     mitigated.repairJob !== null && mitigated.repairJob.status !== 'approved_and_deployed',
@@ -115,7 +139,7 @@ async function runAlternateRouteTests() {
 
   let secondGrantRejected = false;
   try {
-    await intentRuntime.grantAlternateAccess('int_2841', 'user');
+    await intentRuntime.grantAlternateAccess('int_2841', 'I approve a replacement link.', 'user');
   } catch {
     secondGrantRejected = true;
   }

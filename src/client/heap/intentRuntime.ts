@@ -36,6 +36,7 @@ export class IntentRuntime {
   private currentBuild: DemoBuild = 'demo-build-a';
   private repairJob: RepairJob | null = null;
   private accessGrant: InvoiceAccessGrant | null = null;
+  private recoveryApproval: DemoSessionState['recoveryApproval'] = null;
   /** Held in memory only; the plaintext token is never persisted server-side. */
   private lastIssuedAccessUrl: string | null = null;
   private invoiceCreateCount = 0;
@@ -89,6 +90,10 @@ export class IntentRuntime {
 
   public getAccessGrant(): InvoiceAccessGrant | null {
     return this.accessGrant;
+  }
+
+  public getRecoveryApproval(): DemoSessionState['recoveryApproval'] {
+    return this.recoveryApproval;
   }
 
   public hasUsableAccessGrant(): boolean {
@@ -155,9 +160,10 @@ export class IntentRuntime {
   /** Reaches the user's outcome through the allowlisted alternate route. */
   public async grantAlternateAccess(
     intentId: string,
+    userConfirmation: string,
     issuedVia: 'webmcp_agent' | 'user' = 'user',
   ): Promise<{ grant: InvoiceAccessGrant; accessUrl: string; intent: Intent }> {
-    const result = await this.api.grantAlternateAccess(intentId, issuedVia);
+    const result = await this.api.grantAlternateAccess(intentId, issuedVia, userConfirmation);
     this.lastIssuedAccessUrl = result.accessUrl;
     this.applyServerState(result.state);
     const intent = this.intents.get(intentId);
@@ -236,6 +242,7 @@ export class IntentRuntime {
     this.currentBuild = state.build;
     this.repairJob = state.repairJob;
     this.accessGrant = state.accessGrant;
+    this.recoveryApproval = state.recoveryApproval;
     this.invoiceCreateCount = state.invoiceCreateCount;
     this.intents.clear();
     if (state.intent) this.intents.set(state.intent.id, state.intent);

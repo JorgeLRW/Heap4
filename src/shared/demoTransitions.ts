@@ -12,6 +12,7 @@ import type {
   DemoSessionState,
   InvoiceAccessGrant,
   InvoiceAccessView,
+  RecoveryApproval,
   RepairJob,
 } from './demoApiTypes';
 import { appendUserContext, createRepairJob } from './repairPipeline';
@@ -32,6 +33,7 @@ export function createInitialDemoState(sessionId: string): DemoSessionState {
     invoiceCreateCount: 0,
     repairJob: null,
     accessGrant: null,
+    recoveryApproval: null,
   };
 }
 
@@ -250,6 +252,7 @@ export async function grantAlternateAccessTransition(
   state: DemoSessionState,
   intentId: string,
   issuedVia: 'webmcp_agent' | 'user',
+  userConfirmation: string,
 ): Promise<AlternateRouteResult> {
   assertIntent(state, intentId);
   const intent = state.intent!;
@@ -257,9 +260,9 @@ export async function grantAlternateAccessTransition(
   if (intent.status === 'completed') {
     throw new Error(`Intent ${intentId} already reached its outcome through the primary route.`);
   }
-  if (intent.status !== 'blocked' && intent.status !== 'resumable') {
+  if (intent.status !== 'blocked') {
     throw new Error(
-      `Intent ${intentId} is ${intent.status} and does not need an alternate route.`,
+      `Intent ${intentId} is ${intent.status} and is not eligible for an alternate route.`,
     );
   }
   if (!intent.goal.alternateRoutes.includes('secure_share_link')) {
@@ -273,6 +276,10 @@ export async function grantAlternateAccessTransition(
     throw new Error(
       `Invoice ${state.invoice.id} already has an active share link. Revoke it before issuing another.`,
     );
+  }
+  const confirmation = userConfirmation.trim();
+  if (confirmation.length < 3 || confirmation.length > 200) {
+    throw new Error('An explicit user confirmation of 3 to 200 characters is required.');
   }
 
   const issuedAt = new Date();
@@ -288,8 +295,15 @@ export async function grantAlternateAccessTransition(
     expiresAt: new Date(issuedAt.getTime() + ACCESS_GRANT_TTL_MS).toISOString(),
     issuedVia,
   };
+  const approval: RecoveryApproval = {
+    intentId,
+    route: 'secure_share_link',
+    confirmedAt: issuedAt.toISOString(),
+    channel: issuedVia === 'webmcp_agent' ? 'webmcp_agent_conversation' : 'user_interface',
+  };
 
   state.accessGrant = grant;
+  state.recoveryApproval = approval;
   state.invoice.accessGrantedVia = 'secure_share_link';
   intent.progress.goalSatisfiedVia = 'secure_share_link';
   intent.progress.completedSteps = [
@@ -301,13 +315,14 @@ export async function grantAlternateAccessTransition(
   if (intent.status === 'blocked') intent.status = 'mitigated';
   intent.history.push({
     timestamp: issuedAt.toISOString(),
-    note: `Outcome reached through the secure share link route (${grant.id}); the email route remains broken.`,
+    note: `User-confirmed secure share link route issued (${grant.id}); the email route remains broken.`,
   });
 
   return {
     success: true,
     state: cloneDemoState(state),
     grant: cloneDemoState(grant),
+    approval: cloneDemoState(approval),
     accessUrl: buildAccessUrl(token),
   };
 }

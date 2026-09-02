@@ -218,11 +218,15 @@ export default {
       const alternateRouteMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/alternate-route$/);
       if (request.method === 'POST' && alternateRouteMatch) {
         const state = await sessions.get(sessionId);
-        const body = (await request.json()) as { issuedVia?: 'webmcp_agent' | 'user' };
+        const body = (await request.json()) as {
+          issuedVia?: 'webmcp_agent' | 'user';
+          userConfirmation?: string;
+        };
         const result = await grantAlternateAccessTransition(
           state,
           decodeURIComponent(alternateRouteMatch[1]),
           body.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user',
+          String(body.userConfirmation || '').slice(0, 200),
         );
         await sessions.save(state);
         await sessions.indexGrant(result.grant.tokenHash, sessionId);

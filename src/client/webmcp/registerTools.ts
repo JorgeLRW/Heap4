@@ -16,7 +16,11 @@ import type { Intent } from '../heap/intentTypes';
 
 const dynamicControllers = new Map<DynamicToolName, AbortController>();
 
-type DynamicToolName = 'deliver_by_alternate_route' | 'revoke_alternate_delivery' | 'resume_intent';
+type DynamicToolName =
+  | 'get_recovery_options'
+  | 'deliver_by_alternate_route'
+  | 'revoke_alternate_delivery'
+  | 'resume_intent';
 
 let baseRegistrationPromise: Promise<void> | null = null;
 
@@ -389,6 +393,7 @@ export async function onIntentStatusChange(intent: Intent | null): Promise<void>
   );
 
   await Promise.all([
+    syncDynamicTool('get_recovery_options', alternateRouteAvailable, buildRecoveryOptionsTool),
     syncDynamicTool('deliver_by_alternate_route', alternateRouteAvailable, buildAlternateRouteTool),
     syncDynamicTool('revoke_alternate_delivery', hasUsableGrant, buildRevokeAlternateRouteTool),
     syncDynamicTool('resume_intent', intent?.status === 'resumable', buildResumeTool),
@@ -422,6 +427,60 @@ async function syncDynamicTool(
   }
 }
 
+/** Presents the site-approved choices before an agent performs an external action. */
+function buildRecoveryOptionsTool(): ModelContextTool {
+  return {
+    name: 'get_recovery_options',
+    title: 'Get Approved Recovery Options',
+    description:
+      'Explain the site-approved ways to recover a blocked user outcome. This tool does not make a change. Ask the user which option they approve before calling a mutation tool.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Blocked intent whose approved recovery options are needed.' },
+      },
+      required: ['intentId'],
+    },
+    annotations: { readOnlyHint: true },
+    execute: async ({ intentId }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const intent = await refreshAndGetIntent(id);
+      const result = !intent
+        ? intentNotFound(id)
+        : intent.status !== 'blocked' && intent.status !== 'resumable'
+        ? toolError('recovery_options_not_applicable', 'No alternate recovery decision is needed in the current state.', {
+            intentId: id,
+            currentStatus: intent.status,
+          })
+        : {
+            intentId: id,
+            outcome: intent.goal.outcome,
+            primaryRoute: {
+              name: intent.goal.primaryRoute,
+              status: intentRuntime.getCurrentBuild() === 'demo-build-b' ? 'repaired' : 'broken',
+              action: 'Wait for the approved repair, then resume the missing delivery step.',
+            },
+            approvedAlternates: [{
+              name: 'secure_share_link',
+              effect: 'Give the recipient a one-hour, read-only link to this invoice.',
+              constraints: ['One invoice only', 'Amount unchanged', 'Revocable', 'Primary email remains marked incomplete'],
+              requiresUserConfirmation: true,
+            }],
+            nextStep: 'Explain the option to the user and collect an explicit confirmation before issuing the link.',
+          };
+      intentRuntime.logToolCall(
+        'get_recovery_options',
+        { intentId: id },
+        result,
+        Math.max(1, Math.round(performance.now() - startedAt)),
+        true,
+      );
+      return result;
+    },
+  };
+}
+
 /** Re-evaluates the surface after a tool call has already returned its result. */
 function scheduleSurfaceSync(intent: Intent | null): void {
   setTimeout(() => void onIntentStatusChange(intent), 0);
@@ -437,22 +496,27 @@ function buildAlternateRouteTool(): ModelContextTool {
     name: 'deliver_by_alternate_route',
     title: 'Reach the Outcome Another Way',
     description:
-      "Reach the user's original outcome while the primary route is still broken, by issuing a scoped, expiring, revocable share link to the existing invoice. This does not mark the invoice sent, change its amount, create a second invoice, or repair the defect. Hand the returned link to the user.",
+      "After the user explicitly confirms this route, reach the user's original outcome while the primary route is still broken by issuing a scoped, expiring, revocable share link. This does not mark the invoice sent, change its amount, create a second invoice, or repair the defect.",
     inputSchema: {
       type: 'object',
       properties: {
         intentId: { type: 'string', description: 'Blocked intent whose outcome should be reached another way.' },
+        userConfirmation: {
+          type: 'string',
+          description: 'The user\'s explicit confirmation to issue the secure share link, 3 to 200 characters.',
+        },
       },
-      required: ['intentId'],
+      required: ['intentId', 'userConfirmation'],
     },
     annotations: { readOnlyHint: false },
-    execute: async ({ intentId }) => {
+    execute: async ({ intentId, userConfirmation }) => {
       const startedAt = performance.now();
       const id = String(intentId);
+      const confirmation = String(userConfirmation ?? '');
       const logAndReturn = (payload: Record<string, unknown>) => {
         intentRuntime.logToolCall(
           'deliver_by_alternate_route',
-          { intentId: id },
+          { intentId: id, userConfirmation: '[redacted]' },
           // The capability URL is deliberately excluded from the audit log.
           { ...payload, accessUrl: undefined },
           Math.max(1, Math.round(performance.now() - startedAt)),
@@ -463,6 +527,12 @@ function buildAlternateRouteTool(): ModelContextTool {
 
       const current = await refreshAndGetIntent(id);
       if (!current) return logAndReturn(intentNotFound(id));
+      if (confirmation.trim().length < 3 || confirmation.length > 200) {
+        return logAndReturn(toolError('user_confirmation_required', 'A 3 to 200 character explicit user confirmation is required.', {
+          intentId: id,
+          recoveryHint: 'Call get_recovery_options, explain the approved option, and collect the user\'s confirmation.',
+        }));
+      }
       if (current.status !== 'blocked' && current.status !== 'mitigated') {
         return logAndReturn(
           toolError(
@@ -477,7 +547,11 @@ function buildAlternateRouteTool(): ModelContextTool {
         );
       }
 
-      const { grant, accessUrl, intent: updated } = await intentRuntime.grantAlternateAccess(id, 'webmcp_agent');
+      const { grant, accessUrl, intent: updated } = await intentRuntime.grantAlternateAccess(
+        id,
+        confirmation,
+        'webmcp_agent',
+      );
       intentRuntime.requestAgentUiFocus({
         target: 'recovery_drawer',
         intentId: id,

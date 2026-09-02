@@ -81,10 +81,14 @@ export class HttpDemoApi implements DemoApi {
     );
   }
 
-  grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user') {
+  grantAlternateAccess(
+    intentId: string,
+    issuedVia: 'webmcp_agent' | 'user',
+    userConfirmation: string,
+  ) {
     return requestJson<AlternateRouteResult>(
       `/api/demo/intents/${encodeURIComponent(intentId)}/alternate-route`,
-      { method: 'POST', body: JSON.stringify({ issuedVia }) },
+      { method: 'POST', body: JSON.stringify({ issuedVia, userConfirmation }) },
     );
   }
 

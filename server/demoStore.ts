@@ -68,11 +68,13 @@ export class DemoStore {
     sessionId: string,
     intentId: string,
     issuedVia: 'webmcp_agent' | 'user',
+    userConfirmation: string,
   ) {
     const result = await grantAlternateAccessTransition(
       this.mutableState(sessionId),
       intentId,
       issuedVia,
+      userConfirmation,
     );
     this.grantIndex.set(result.grant.tokenHash, sessionId);
     return result;
@@ -184,8 +186,12 @@ export class InMemoryDemoApi implements DemoApi {
     return this.store.resumeIntent(this.sessionId, intentId);
   }
 
-  async grantAlternateAccess(intentId: string, issuedVia: 'webmcp_agent' | 'user') {
-    return this.store.grantAlternateAccess(this.sessionId, intentId, issuedVia);
+  async grantAlternateAccess(
+    intentId: string,
+    issuedVia: 'webmcp_agent' | 'user',
+    userConfirmation: string,
+  ) {
+    return this.store.grantAlternateAccess(this.sessionId, intentId, issuedVia, userConfirmation);
   }
 
   async revokeAlternateAccess(intentId: string, reason: string) {
