@@ -90,13 +90,15 @@ The tool surface is an authorization-aware discovery boundary, not the enforceme
 
 ## Why not just automatic failover?
 
-Load balancers, retries, and circuit breakers already fail over automatically, and they should keep doing that here too. The distinction is what kind of substitute is being offered.
+Load balancers, retries, and circuit breakers already fail over automatically, and they should keep doing that here too. The line between "keep it automatic" and "ask first" is a concrete question, not a vibe:
 
-Ordinary failover swaps in something *equivalent*: the same request goes to a different node, region, or provider, and nothing about what the recipient is exposed to changes. That is a safe default because no judgment call is being made — it is the same thing happening, just somewhere else. It should stay fully automatic, with no agent involved.
+> **Does the substitute change who can see the data, what they can see, or how long they can see it?**
 
-The alternate route here is not equivalent. Email delivery and a scoped, read-only share link are different disclosures with different risk. Swapping one for the other is a policy decision, not an infrastructure decision, and policy decisions about what a third party gets exposed to should have a decision-maker at the moment they're made — not just an operator's default from months earlier.
+Ordinary failover answers no. The same email goes to the same inbox whether it was sent from node A or node B — the recipient, the content, and the access model are identical. Nothing about the disclosure changed, so no judgment call is needed. It should stay fully automatic, with no agent involved.
 
-That is why the flow is three separate steps instead of one automatic branch: `get_recovery_options` explains what changed and what the substitute would expose, the user gives an explicit confirmation, and only then does `deliver_by_alternate_route` mint the capability. The site still defines and enforces what's allowed at all — the allowlist, the scope, the expiry — the same way an operator defines valid failover targets. What's added is the one gate that matters: confirming that *this specific, non-equivalent substitute* is acceptable *this time*.
+The alternate route here answers yes. Email lands permanently in an inbox; the share link is a revocable, time-boxed, read-only URL. Different access model, different exposure window, different party trusted with it. Swapping one for the other is a disclosure decision, not a routing decision, and disclosure decisions need a decision-maker at the moment they're made — not just an operator's default from months earlier.
+
+That is why the flow is three separate steps instead of one automatic branch: `get_recovery_options` explains what would change about who can see the invoice and for how long, the user gives an explicit confirmation, and only then does `deliver_by_alternate_route` mint the capability. The site still defines and enforces what's allowed at all — the allowlist, the scope, the expiry — the same way an operator defines valid failover targets. What's added is the one gate that matters: confirming that *this specific change in who can see the data* is acceptable *this time*.
 
 ## Authority boundaries
 
