@@ -56,6 +56,8 @@ function describeAccessGrant() {
     active: intentRuntime.hasUsableAccessGrant(),
     revokedAt: grant.revokedAt ?? null,
     revokedReason: grant.revokedReason ?? null,
+    /** Server-authoritative fact for "did they already view it?" — never guessed by the agent. */
+    firstAccessedAt: grant.firstAccessedAt ?? null,
   };
 }
 

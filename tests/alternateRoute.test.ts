@@ -137,6 +137,19 @@ async function runAlternateRouteTests() {
   const forgedView = await intentRuntime.readInvoiceByAccessToken(`${token}tampered`);
   assert(forgedView.success === false, 'A tampered capability token is rejected');
 
+  await intentRuntime.refreshFromServer();
+  const firstStamp = intentRuntime.getAccessGrant()?.firstAccessedAt ?? null;
+  assert(
+    typeof firstStamp === 'string',
+    'A recipient read stamps a server-authoritative first-access time',
+  );
+  await intentRuntime.readInvoiceByAccessToken(token);
+  await intentRuntime.refreshFromServer();
+  assert(
+    intentRuntime.getAccessGrant()?.firstAccessedAt === firstStamp,
+    'A repeated recipient read does not move the first-access time',
+  );
+
   let secondGrantRejected = false;
   try {
     await intentRuntime.grantAlternateAccess('int_2841', 'I approve a replacement link.', 'user');

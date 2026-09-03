@@ -50,6 +50,8 @@ export interface InvoiceAccessGrant {
   issuedVia: 'webmcp_agent' | 'user';
   revokedAt?: string;
   revokedReason?: string;
+  /** Set the first time the recipient endpoint successfully resolves this grant. */
+  firstAccessedAt?: string;
 }
 
 /** The read-only projection returned to a holder of a valid share link. */

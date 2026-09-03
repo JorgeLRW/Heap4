@@ -344,6 +344,12 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   </div>
                 )}
                 <div className="text-slate-300">
+                  • Recipient viewed:{' '}
+                  <strong className={accessGrant.firstAccessedAt ? 'text-amber-300' : 'text-slate-400'}>
+                    {accessGrant.firstAccessedAt ? new Date(accessGrant.firstAccessedAt).toLocaleTimeString() : 'not yet'}
+                  </strong>
+                </div>
+                <div className="text-slate-300">
                   • State:{' '}
                   <strong className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-400'}>
                     {accessGrant.revokedAt ? `revoked — ${accessGrant.revokedReason}` : `expires ${new Date(accessGrant.expiresAt).toLocaleTimeString()}`}

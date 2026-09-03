@@ -1,8 +1,18 @@
 # Heap 4
 
-**A website that remembers what you were trying to do, and hands your agent exactly the capabilities that can still finish it.**
+**A state-aware capability runtime: web applications expose dynamic, state-gated tool surfaces that any WebMCP agent can discover in-session, navigate through degraded mitigation states, and reconcile once the primary route heals.**
 
-Heap 4 is a WebMCP surface for interrupted web workflows. When a server failure interrupts a user, the site preserves the *outcome* the user was after — not just the button they clicked — and exposes it to a browser agent that arrives cold. The set of tools the agent can see changes as server-authoritative state changes, so an agent is offered a capability exactly while the server would authorize it, and never otherwise.
+We don't use an LLM to invent business logic — that belongs in a deterministic, server-side state machine. Heap 4 is that state machine, plus the WebMCP surface that lets any compliant agent reach it without a bespoke integration.
+
+## What the agent actually does — and doesn't do
+
+Be precise about this, because it's easy to overclaim: **the agent makes zero policy decisions.** Every constraint — the allowlist, the scope, the expiry, the duplicate-issuance check, the confirmation requirement — is enforced server-side, identically whether the caller is an LLM, a script, or a curl command. Trace an actual call: `get_recovery_options` is a read. `deliver_by_alternate_route` takes a confirmation string and then re-validates status, allowlist, and invariants regardless of what that string says. The agent's job is translation — structured state into a conversation, a user's answer back into the next call — not reasoning about what's allowed.
+
+That is deliberate, not a limitation to apologize for. Non-deterministic behavior around data disclosure and capability grants is a liability, not a feature; a security or compliance reviewer should be relieved, not disappointed, that the LLM cannot invent a route. If you could replace the agent with a Temporal workflow, a Step Functions saga, and a Slack approval card and lose nothing — you're right, and for a single app with the user present, you should. A two-button web notification resolves this exact scenario with less latency, no token cost, and no prompt-injection surface.
+
+So why involve an agent at all? Because the actual moat isn't reasoning — it's the $N \times M$ integration problem. If fifty SaaS vendors each build their own failure-recovery workflow, a user coordinating across them needs fifty bespoke dashboards, notification schemes, and webhook endpoints. WebMCP is a standard, in-session contract for *discovering* an interrupted intent and its currently-authorized recovery capabilities — reachable by any compliant agent, with no per-vendor connector. That's a protocol claim, not an intelligence claim.
+
+There is one place a general agent adds something a static two-button card structurally cannot: answering open-ended follow-up questions grounded in the same state data the tools already return — "what timezone does this expire in," "can they forward this link to someone else," "has Acme already opened it." A card can't have that conversation without the site author hand-coding an FAQ for every edge case; an LLM reading `get_recovery_options`/`inspect_intent` output can. That last question isn't rhetorical here — the share grant tracks a real `firstAccessedAt` timestamp server-side precisely so the answer is a fact, not a guess.
 
 ## The thesis
 
@@ -29,6 +39,12 @@ This is the part that is native to WebMCP and impossible in a static tool manife
 | `completed` — nothing outstanding | absent | absent | absent | absent |
 
 The agent normally cannot discover an action that is invalid for the current state. Stale tool handles and race conditions remain possible, so every mutation still needs server-side enforcement. `deliver_by_alternate_route` withdraws itself after a link exists, while the server also rejects duplicate issuance. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
+
+This is a HATEOAS-style property applied to tools instead of hypermedia links: valid next actions are discoverable from the current state, and invalid ones are structurally absent rather than merely discouraged by a system prompt. Most agent stacks dump every tool definition into the prompt and rely on the model not to call one out of sequence. Here, an out-of-sequence call isn't a prompting failure to guard against \u2014 the tool doesn't exist yet.
+
+The mitigated state is also not just a nicer error screen. A static "email failed, click for a link instead" modal treats the failure as terminal: once clicked, the app has no further relationship to the original goal, and the link tends to outlive its usefulness. Heap 4 treats it as a degraded state in an open reconciliation loop \u2014 issue an ephemeral, revocable capability, keep polling repair status in the background (`intentRuntime`'s `repairPollTimer`, already running, not aspirational), and once the primary route heals, complete it and withdraw the workaround without being asked twice. `revoke_alternate_delivery` staying registered through `resumable` is what that teardown step looks like in the tool surface.
+
+One claim worth qualifying rather than asserting: because the tool executes in the page's own session, a production deployment's per-user authorization would apply to the agent automatically \u2014 no separate credential to provision, no separate permission model to keep in sync. That's a real architectural property of WebMCP. It is *not* something this demo exercises: `getDemoSessionId()` is a single pseudo-session with no login system and no per-user role model, so there's nothing here to test that claim against yet.
 
 ## The vertical slice
 

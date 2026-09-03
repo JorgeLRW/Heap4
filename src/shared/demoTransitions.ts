@@ -377,7 +377,12 @@ export function toAccessView(
   };
 }
 
-/** Resolves a presented capability token against the session's single grant. */
+/**
+ * Resolves a presented capability token against the session's single grant.
+ * Stamps the grant's first-access time in place so a later `inspect_intent` or
+ * `get_recovery_options` call can answer "did they already view it?" with a
+ * server-authoritative fact instead of the agent guessing.
+ */
 export function readInvoiceByGrant(
   state: DemoSessionState,
 ): { success: true; invoice: NonNullable<DemoSessionState['invoice']>; grant: InvoiceAccessGrant } | { success: false; error: string } {
@@ -391,5 +396,6 @@ export function readInvoiceByGrant(
       error: usability.reason === 'revoked' ? 'This share link was revoked.' : 'This share link has expired.',
     };
   }
+  if (!grant.firstAccessedAt) grant.firstAccessedAt = new Date().toISOString();
   return { success: true, invoice: state.invoice, grant };
 }

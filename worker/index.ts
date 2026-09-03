@@ -121,6 +121,7 @@ export default {
 
         const resolved = readInvoiceByGrant(state);
         if (!resolved.success) return json({ success: false, error: resolved.error }, 403);
+        await sessions.save(state);
         return json({
           success: true,
           invoice: toAccessView(resolved.invoice, resolved.grant.expiresAt),
