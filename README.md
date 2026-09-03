@@ -88,6 +88,16 @@ That has three consequences worth stating plainly:
 
 The tool surface is an authorization-aware discovery boundary, not the enforcement boundary. Because tools are registered from server-authoritative state, the agent normally discovers only actions relevant to the current state; server-side checks still decide whether a stale or racing call succeeds.
 
+## Why not just automatic failover?
+
+Load balancers, retries, and circuit breakers already fail over automatically, and they should keep doing that here too. The distinction is what kind of substitute is being offered.
+
+Ordinary failover swaps in something *equivalent*: the same request goes to a different node, region, or provider, and nothing about what the recipient is exposed to changes. That is a safe default because no judgment call is being made — it is the same thing happening, just somewhere else. It should stay fully automatic, with no agent involved.
+
+The alternate route here is not equivalent. Email delivery and a scoped, read-only share link are different disclosures with different risk. Swapping one for the other is a policy decision, not an infrastructure decision, and policy decisions about what a third party gets exposed to should have a decision-maker at the moment they're made — not just an operator's default from months earlier.
+
+That is why the flow is three separate steps instead of one automatic branch: `get_recovery_options` explains what changed and what the substitute would expose, the user gives an explicit confirmation, and only then does `deliver_by_alternate_route` mint the capability. The site still defines and enforces what's allowed at all — the allowlist, the scope, the expiry — the same way an operator defines valid failover targets. What's added is the one gate that matters: confirming that *this specific, non-equivalent substitute* is acceptable *this time*.
+
 ## Authority boundaries
 
 ```text
