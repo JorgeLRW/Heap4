@@ -11,14 +11,16 @@ import {
 } from '../src/shared/repairSandboxExecution';
 import {
   appendIntentContextTransition,
+  createScopedAccessGrantTransition,
   deployRepairTransition,
-  grantAlternateAccessTransition,
   readInvoiceByGrant,
   requestRepairTransition,
   resumeIntentTransition,
   revokeAlternateAccessTransition,
+  setRecoveryScenarioTransition,
   sendInvoiceTransition,
   toAccessView,
+  uploadInvoiceToProcurementPortalTransition,
 } from '../src/shared/demoTransitions';
 import { DemoSessionRepository } from '../worker/demoSessionRepository';
 
@@ -286,7 +288,18 @@ export default {
         return json(result);
       }
 
-      const revokeMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/alternate-route\/revoke$/);
+      if (request.method === 'POST' && url.pathname === '/api/demo/recovery-scenario') {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as { scenario?: string };
+        if (body.scenario !== 'portal_outage' && body.scenario !== 'portal_only') {
+          throw new Error('Recovery scenario must be portal_outage or portal_only.');
+        }
+        const result = setRecoveryScenarioTransition(state, body.scenario);
+        await sessions.save(state);
+        return json(result.state);
+      }
+
+      const revokeMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/access-grants\/revoke$/);
       if (request.method === 'POST' && revokeMatch) {
         const state = await sessions.get(sessionId);
         const body = (await request.json()) as { reason?: string };
@@ -301,21 +314,40 @@ export default {
         return json(result);
       }
 
-      const alternateRouteMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/alternate-route$/);
-      if (request.method === 'POST' && alternateRouteMatch) {
+      const accessGrantMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/access-grants$/);
+      if (request.method === 'POST' && accessGrantMatch) {
         const state = await sessions.get(sessionId);
         const body = (await request.json()) as {
+          contactId?: string;
+          expirationMinutes?: number;
+          scope?: 'read_invoice_only';
           issuedVia?: 'webmcp_agent' | 'user';
           userConfirmation?: string;
         };
-        const result = await grantAlternateAccessTransition(
+        const result = await createScopedAccessGrantTransition(
           state,
-          decodeURIComponent(alternateRouteMatch[1]),
+          decodeURIComponent(accessGrantMatch[1]),
+          String(body.contactId || ''),
+          Number(body.expirationMinutes),
+          body.scope as 'read_invoice_only',
           body.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user',
           String(body.userConfirmation || '').slice(0, 200),
         );
         await sessions.save(state);
         await sessions.indexGrant(result.grant.tokenHash, sessionId);
+        return json(result);
+      }
+
+      const portalMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/procurement-portal$/);
+      if (request.method === 'POST' && portalMatch) {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as { contactId?: string };
+        const result = uploadInvoiceToProcurementPortalTransition(
+          state,
+          decodeURIComponent(portalMatch[1]),
+          String(body.contactId || ''),
+        );
+        await sessions.save(state);
         return json(result);
       }
 

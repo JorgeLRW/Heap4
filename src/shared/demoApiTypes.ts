@@ -42,6 +42,7 @@ export interface InvoiceAccessGrant {
   id: string;
   intentId: string;
   invoiceId: string;
+  contactId: string;
   audience: string;
   scope: 'read_invoice_only';
   tokenHash: string;
@@ -70,8 +71,46 @@ export interface InvoiceAccessView {
 export interface RecoveryApproval {
   intentId: string;
   route: 'secure_share_link';
+  contactId: string;
   confirmedAt: string;
   channel: 'webmcp_agent_conversation' | 'user_interface';
+}
+
+export type RecoveryScenarioId = 'portal_outage' | 'portal_only';
+
+export interface AuthorizedContact {
+  id: string;
+  customerId: string;
+  name: string;
+  email: string;
+  role: 'acting_ap_approver' | 'archival_billing';
+  active: boolean;
+  notes: string;
+}
+
+export interface CustomerDeliveryPolicy {
+  id: string;
+  customerId: string;
+  version: string;
+  sourceText: string;
+  enforcement: {
+    externalLinksAllowed: boolean;
+    maximumLinkMinutes: number;
+    externalLinkContactIds: string[];
+    procurementPortalAllowed: boolean;
+    procurementPortalContactIds: string[];
+    confirmationRequiredForExternalLink: boolean;
+  };
+}
+
+export interface ProcurementPortalReceipt {
+  id: string;
+  intentId: string;
+  invoiceId: string;
+  contactId: string;
+  portalAccount: string;
+  uploadedAt: string;
+  verifiedAt: string;
 }
 
 export interface RepairArtifact {
@@ -184,9 +223,14 @@ export interface DemoSessionState {
   repairJob: RepairJob | null;
   accessGrant: InvoiceAccessGrant | null;
   recoveryApproval: RecoveryApproval | null;
+  recoveryScenario: RecoveryScenarioId;
+  customerPolicy: CustomerDeliveryPolicy;
+  authorizedContacts: AuthorizedContact[];
+  procurementPortalAvailable: boolean;
+  procurementPortalReceipt: ProcurementPortalReceipt | null;
 }
 
-export interface AlternateRouteResult {
+export interface ScopedAccessGrantResult {
   success: boolean;
   state: DemoSessionState;
   grant: InvoiceAccessGrant;
@@ -203,11 +247,19 @@ export interface DemoApi {
   appendIntentContext(intentId: string, text: string, source?: 'user' | 'agent'): Promise<{ success: boolean; state: DemoSessionState }>;
   deployRepair(jobId: string): Promise<{ success: boolean; state: DemoSessionState }>;
   resumeIntent(intentId: string): Promise<{ success: boolean; state: DemoSessionState }>;
-  grantAlternateAccess(
+  setRecoveryScenario(scenario: RecoveryScenarioId): Promise<DemoSessionState>;
+  createScopedAccessGrant(
     intentId: string,
+    contactId: string,
+    expirationMinutes: number,
+    scope: 'read_invoice_only',
     issuedVia: 'webmcp_agent' | 'user',
     userConfirmation: string,
-  ): Promise<AlternateRouteResult>;
+  ): Promise<ScopedAccessGrantResult>;
+  uploadInvoiceToProcurementPortal(
+    intentId: string,
+    contactId: string,
+  ): Promise<{ success: boolean; state: DemoSessionState; receipt: ProcurementPortalReceipt }>;
   revokeAlternateAccess(intentId: string, reason: string): Promise<{ success: boolean; state: DemoSessionState }>;
   readInvoiceByAccessToken(token: string): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }>;
 }

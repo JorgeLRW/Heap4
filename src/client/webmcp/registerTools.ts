@@ -17,9 +17,11 @@ import type { Intent } from '../heap/intentTypes';
 const dynamicControllers = new Map<DynamicToolName, AbortController>();
 
 type DynamicToolName =
-  | 'get_recovery_options'
-  | 'deliver_by_alternate_route'
-  | 'revoke_alternate_delivery'
+  | 'inspect_customer_delivery_policy'
+  | 'list_authorized_contacts'
+  | 'create_scoped_access_grant'
+  | 'upload_invoice_to_procurement_portal'
+  | 'revoke_access_grant'
   | 'resume_intent';
 
 let baseRegistrationPromise: Promise<void> | null = null;
@@ -338,7 +340,9 @@ export function initializeWebMCPTools(): Promise<void> {
           return missing;
         }
         const goalSatisfied = Boolean(
-          intent.progress.deliveryCompleted || intentRuntime.hasUsableAccessGrant()
+          intent.progress.deliveryCompleted ||
+            intentRuntime.hasUsableAccessGrant() ||
+            intentRuntime.getProcurementPortalReceipt()
         );
         intentRuntime.requestAgentUiFocus({
           target: 'recovery_drawer',
@@ -355,6 +359,7 @@ export function initializeWebMCPTools(): Promise<void> {
           primaryRouteDelivered: intent.progress.deliveryCompleted,
           primaryRouteRepaired: intentRuntime.getCurrentBuild() === 'demo-build-b',
           outstandingAccessGrant: describeAccessGrant(),
+          procurementPortalReceipt: intentRuntime.getProcurementPortalReceipt(),
           invoiceCreateCount: intentRuntime.getInvoiceCreateCount(),
           invariantsPreserved: intentRuntime.getInvoiceCreateCount() === 1,
         };
@@ -386,18 +391,27 @@ export function initializeWebMCPTools(): Promise<void> {
  */
 export async function onIntentStatusChange(intent: Intent | null): Promise<void> {
   const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
-  const primaryRouteBroken = intent?.status === 'blocked' || intent?.status === 'mitigated';
-  const alternateRouteAvailable = Boolean(
-    intent &&
-      primaryRouteBroken &&
-      !hasUsableGrant &&
-      intent.goal.alternateRoutes.includes('secure_share_link')
-  );
+  const needsRecoveryPlan = intent?.status === 'blocked';
+  const recoveryFactsRelevant = intent?.status === 'blocked' || intent?.status === 'mitigated';
 
   await Promise.all([
-    syncDynamicTool('get_recovery_options', alternateRouteAvailable, buildRecoveryOptionsTool),
-    syncDynamicTool('deliver_by_alternate_route', alternateRouteAvailable, buildAlternateRouteTool),
-    syncDynamicTool('revoke_alternate_delivery', hasUsableGrant, buildRevokeAlternateRouteTool),
+    syncDynamicTool(
+      'inspect_customer_delivery_policy',
+      recoveryFactsRelevant,
+      buildInspectCustomerDeliveryPolicyTool,
+    ),
+    syncDynamicTool('list_authorized_contacts', recoveryFactsRelevant, buildListAuthorizedContactsTool),
+    syncDynamicTool(
+      'create_scoped_access_grant',
+      Boolean(needsRecoveryPlan && !hasUsableGrant),
+      buildCreateScopedAccessGrantTool,
+    ),
+    syncDynamicTool(
+      'upload_invoice_to_procurement_portal',
+      Boolean(needsRecoveryPlan),
+      buildUploadInvoiceToProcurementPortalTool,
+    ),
+    syncDynamicTool('revoke_access_grant', hasUsableGrant, buildRevokeAccessGrantTool),
     syncDynamicTool('resume_intent', intent?.status === 'resumable', buildResumeTool),
   ]);
 }
@@ -429,17 +443,17 @@ async function syncDynamicTool(
   }
 }
 
-/** Presents the site-approved choices before an agent performs an external action. */
-function buildRecoveryOptionsTool(): ModelContextTool {
+/** Returns policy evidence, not a site-authored recovery plan. */
+function buildInspectCustomerDeliveryPolicyTool(): ModelContextTool {
   return {
-    name: 'get_recovery_options',
-    title: 'Get Approved Recovery Options',
+    name: 'inspect_customer_delivery_policy',
+    title: 'Inspect Customer Delivery Policy',
     description:
-      'Explain the site-approved ways to recover a blocked user outcome. This tool does not make a change. Ask the user which option they approve before calling a mutation tool.',
+      'Read the customer-specific delivery policy as source evidence. Interpret it together with the user goal and available primitive tools; this does not return or select a recovery plan.',
     inputSchema: {
       type: 'object',
       properties: {
-        intentId: { type: 'string', description: 'Blocked intent whose approved recovery options are needed.' },
+        intentId: { type: 'string', description: 'Intent whose customer delivery policy is needed.' },
       },
       required: ['intentId'],
     },
@@ -448,31 +462,67 @@ function buildRecoveryOptionsTool(): ModelContextTool {
       const startedAt = performance.now();
       const id = String(intentId);
       const intent = await refreshAndGetIntent(id);
+      const policy = intentRuntime.getCustomerPolicy();
       const result = !intent
         ? intentNotFound(id)
-        : intent.status !== 'blocked' && intent.status !== 'resumable'
-        ? toolError('recovery_options_not_applicable', 'No alternate recovery decision is needed in the current state.', {
-            intentId: id,
-            currentStatus: intent.status,
-          })
+        : !policy || policy.customerId !== intent.entities.customerId
+          ? toolError('policy_not_found', `No customer delivery policy matches intent ${id}.`)
+          : {
+              intentId: id,
+              customerId: policy.customerId,
+              policyId: policy.id,
+              version: policy.version,
+              sourceText: policy.sourceText,
+              rules: [policy.sourceText],
+              notice:
+                'This is policy evidence, not a recovery recommendation. Propose a plan from the evidence and available capabilities; every mutation is independently verified by the server.',
+            };
+      intentRuntime.logToolCall(
+        'inspect_customer_delivery_policy',
+        { intentId: id },
+        result,
+        Math.max(1, Math.round(performance.now() - startedAt)),
+        true,
+      );
+      return result;
+    },
+  };
+}
+
+function buildListAuthorizedContactsTool(): ModelContextTool {
+  return {
+    name: 'list_authorized_contacts',
+    title: 'List Customer Contacts',
+    description:
+      'List current customer contacts and their business roles. Contact presence is evidence, not authorization for a particular action; interpret the customer policy before choosing one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Intent whose customer contacts should be listed.' },
+      },
+      required: ['intentId'],
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: async ({ intentId }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const intent = await refreshAndGetIntent(id);
+      const result = !intent
+        ? intentNotFound(id)
         : {
             intentId: id,
-            outcome: intent.goal.outcome,
-            primaryRoute: {
-              name: intent.goal.primaryRoute,
-              status: intentRuntime.getCurrentBuild() === 'demo-build-b' ? 'repaired' : 'broken',
-              action: 'Wait for the approved repair, then resume the missing delivery step.',
-            },
-            approvedAlternates: [{
-              name: 'secure_share_link',
-              effect: 'Give the recipient a one-hour, read-only link to this invoice.',
-              constraints: ['One invoice only', 'Amount unchanged', 'Revocable', 'Primary email remains marked incomplete'],
-              requiresUserConfirmation: true,
-            }],
-            nextStep: 'Explain the option to the user and collect an explicit confirmation before issuing the link.',
+            customerId: intent.entities.customerId,
+            contacts: intentRuntime.getAuthorizedContacts().map((contact) => ({
+              id: contact.id,
+              name: contact.name,
+              email: contact.email,
+              role: contact.role,
+              active: contact.active,
+              notes: contact.notes,
+            })),
           };
       intentRuntime.logToolCall(
-        'get_recovery_options',
+        'list_authorized_contacts',
         { intentId: id },
         result,
         Math.max(1, Math.round(performance.now() - startedAt)),
@@ -493,32 +543,48 @@ function scheduleSurfaceSync(intent: Intent | null): void {
  * This reaches the user's outcome without waiting for, or standing in for, the
  * engineering repair.
  */
-function buildAlternateRouteTool(): ModelContextTool {
+function buildCreateScopedAccessGrantTool(): ModelContextTool {
   return {
-    name: 'deliver_by_alternate_route',
-    title: 'Reach the Outcome Another Way',
+    name: 'create_scoped_access_grant',
+    title: 'Create Scoped Invoice Access',
     description:
-      "After the user explicitly confirms this route, reach the user's original outcome while the primary route is still broken by issuing a scoped, expiring, revocable share link. This does not mark the invoice sent, change its amount, create a second invoice, or repair the defect.",
+      'Create one expiring, revocable, read-only grant for a chosen contact after explicit user confirmation. Supply the contact, scope, and duration you inferred from policy evidence. The server independently verifies every parameter.',
     inputSchema: {
       type: 'object',
       properties: {
         intentId: { type: 'string', description: 'Blocked intent whose outcome should be reached another way.' },
+        contactId: { type: 'string', description: 'Contact selected from list_authorized_contacts.' },
+        expirationMinutes: {
+          type: 'number',
+          description: 'Requested grant lifetime in whole minutes, inferred from customer policy.',
+        },
+        scope: {
+          type: 'string',
+          enum: ['read_invoice_only'],
+          description: 'Narrow resource scope requested for the grant.',
+        },
         userConfirmation: {
           type: 'string',
           description: 'The user\'s explicit confirmation to issue the secure share link, 3 to 200 characters.',
         },
       },
-      required: ['intentId', 'userConfirmation'],
+      required: ['intentId', 'contactId', 'expirationMinutes', 'scope', 'userConfirmation'],
     },
     annotations: { readOnlyHint: false },
-    execute: async ({ intentId, userConfirmation }) => {
+    execute: async ({ intentId, contactId, expirationMinutes, scope, userConfirmation }) => {
       const startedAt = performance.now();
       const id = String(intentId);
       const confirmation = String(userConfirmation ?? '');
       const logAndReturn = (payload: Record<string, unknown>) => {
         intentRuntime.logToolCall(
-          'deliver_by_alternate_route',
-          { intentId: id, userConfirmation: '[redacted]' },
+          'create_scoped_access_grant',
+          {
+            intentId: id,
+            contactId: String(contactId),
+            expirationMinutes: Number(expirationMinutes),
+            scope: String(scope),
+            userConfirmation: '[redacted]',
+          },
           // The capability URL is deliberately excluded from the audit log.
           { ...payload, accessUrl: undefined },
           Math.max(1, Math.round(performance.now() - startedAt)),
@@ -532,7 +598,7 @@ function buildAlternateRouteTool(): ModelContextTool {
       if (confirmation.trim().length < 3 || confirmation.length > 200) {
         return logAndReturn(toolError('user_confirmation_required', 'A 3 to 200 character explicit user confirmation is required.', {
           intentId: id,
-          recoveryHint: 'Call get_recovery_options, explain the approved option, and collect the user\'s confirmation.',
+          recoveryHint: 'Explain the proposed disclosure change and collect the user\'s confirmation.',
         }));
       }
       if (current.status !== 'blocked' && current.status !== 'mitigated') {
@@ -549,16 +615,31 @@ function buildAlternateRouteTool(): ModelContextTool {
         );
       }
 
-      const { grant, accessUrl, intent: updated } = await intentRuntime.grantAlternateAccess(
-        id,
-        confirmation,
-        'webmcp_agent',
-      );
+      let created;
+      try {
+        created = await intentRuntime.createScopedAccessGrant(
+          id,
+          String(contactId),
+          Number(expirationMinutes),
+          String(scope) as 'read_invoice_only',
+          confirmation,
+          'webmcp_agent',
+        );
+      } catch (error) {
+        return logAndReturn(
+          toolError('policy_verification_failed', error instanceof Error ? error.message : String(error), {
+            intentId: id,
+            recoveryHint:
+              'Re-read the customer policy and contacts, inspect the remaining primitive tools, and propose a revised plan.',
+          }),
+        );
+      }
+      const { grant, accessUrl, intent: updated } = created;
       intentRuntime.requestAgentUiFocus({
         target: 'recovery_drawer',
         intentId: id,
         highlight: 'alternate_route',
-        toolName: 'deliver_by_alternate_route',
+        toolName: 'create_scoped_access_grant',
       });
       scheduleSurfaceSync(updated);
 
@@ -573,16 +654,74 @@ function buildAlternateRouteTool(): ModelContextTool {
         primaryRouteStillBroken: true,
         repairStatus: intentRuntime.getRepairJob()?.status ?? 'not_started',
         handOff:
-          'Give this link to the user. It is shown once, reads one invoice, expires, and can be revoked with revoke_alternate_delivery.',
+          'Give this link to the user. It is shown once, reads one invoice, expires, and can be revoked with revoke_access_grant.',
       });
     },
   };
 }
 
-/** Present only while a usable share link exists, so a workaround is always retractable. */
-function buildRevokeAlternateRouteTool(): ModelContextTool {
+function buildUploadInvoiceToProcurementPortalTool(): ModelContextTool {
   return {
-    name: 'revoke_alternate_delivery',
+    name: 'upload_invoice_to_procurement_portal',
+    title: 'Upload Finalized Invoice to Procurement Portal',
+    description:
+      'Attempt to upload the existing finalized invoice to the customer procurement portal for a selected contact. The server verifies policy, contact eligibility, artifact identity, and channel availability. It may fail at runtime; observe the result and replan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Blocked invoice delivery intent.' },
+        contactId: { type: 'string', description: 'Contact selected from list_authorized_contacts.' },
+      },
+      required: ['intentId', 'contactId'],
+    },
+    annotations: { readOnlyHint: false },
+    execute: async ({ intentId, contactId }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const selectedContactId = String(contactId);
+      const logAndReturn = (payload: Record<string, unknown>) => {
+        intentRuntime.logToolCall(
+          'upload_invoice_to_procurement_portal',
+          { intentId: id, contactId: selectedContactId },
+          payload,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false,
+        );
+        return payload;
+      };
+      if (!(await refreshAndGetIntent(id))) return logAndReturn(intentNotFound(id));
+      try {
+        const { receipt, intent: updated } = await intentRuntime.uploadInvoiceToProcurementPortal(
+          id,
+          selectedContactId,
+        );
+        scheduleSurfaceSync(updated);
+        return logAndReturn({
+          ok: true,
+          intentId: id,
+          outcomeReached: true,
+          via: 'procurement_portal',
+          receipt,
+          primaryRouteStillBroken: true,
+        });
+      } catch (error) {
+        return logAndReturn(
+          toolError('capability_execution_failed', error instanceof Error ? error.message : String(error), {
+            intentId: id,
+            observedAt: new Date().toISOString(),
+            recoveryHint:
+              'This plan did not work. Re-read policy evidence and contacts, then use a different legal primitive if one remains.',
+          }),
+        );
+      }
+    },
+  };
+}
+
+/** Present only while a usable share link exists, so a workaround is always retractable. */
+function buildRevokeAccessGrantTool(): ModelContextTool {
+  return {
+    name: 'revoke_access_grant',
     title: 'Revoke the Share Link',
     description:
       'Revoke the share link issued as a workaround, for example once the primary route is repaired and the invoice has genuinely been sent. Access stops immediately.',
@@ -601,7 +740,7 @@ function buildRevokeAlternateRouteTool(): ModelContextTool {
       const note = String(reason ?? '');
       const logAndReturn = (payload: Record<string, unknown>) => {
         intentRuntime.logToolCall(
-          'revoke_alternate_delivery',
+          'revoke_access_grant',
           { intentId: id, reason: note },
           payload,
           Math.max(1, Math.round(performance.now() - startedAt)),
@@ -626,7 +765,7 @@ function buildRevokeAlternateRouteTool(): ModelContextTool {
         target: 'recovery_drawer',
         intentId: id,
         highlight: 'alternate_route',
-        toolName: 'revoke_alternate_delivery',
+        toolName: 'revoke_access_grant',
       });
       scheduleSurfaceSync(updated);
 

@@ -10,15 +10,18 @@ import {
   cloneDemoState,
   createInitialDemoState,
   appendIntentContextTransition,
+  createScopedAccessGrantTransition,
   deployRepairTransition,
-  grantAlternateAccessTransition,
   readInvoiceByGrant,
   requestRepairTransition,
   resumeIntentTransition,
   revokeAlternateAccessTransition,
+  setRecoveryScenarioTransition,
   sendInvoiceTransition,
   toAccessView,
+  uploadInvoiceToProcurementPortalTransition,
 } from '../src/shared/demoTransitions';
+import type { RecoveryScenarioId } from '../src/shared/demoApiTypes';
 import { executeRepairPipeline } from '../src/shared/repairSandboxExecution';
 import { LocalRepairSandbox } from './localRepairSandbox';
 
@@ -64,20 +67,38 @@ export class DemoStore {
     return resumeIntentTransition(this.mutableState(sessionId), intentId);
   }
 
-  async grantAlternateAccess(
+  setRecoveryScenario(sessionId: string, scenario: RecoveryScenarioId) {
+    return setRecoveryScenarioTransition(this.mutableState(sessionId), scenario).state;
+  }
+
+  async createScopedAccessGrant(
     sessionId: string,
     intentId: string,
+    contactId: string,
+    expirationMinutes: number,
+    scope: 'read_invoice_only',
     issuedVia: 'webmcp_agent' | 'user',
     userConfirmation: string,
   ) {
-    const result = await grantAlternateAccessTransition(
+    const result = await createScopedAccessGrantTransition(
       this.mutableState(sessionId),
       intentId,
+      contactId,
+      expirationMinutes,
+      scope,
       issuedVia,
       userConfirmation,
     );
     this.grantIndex.set(result.grant.tokenHash, sessionId);
     return result;
+  }
+
+  uploadInvoiceToProcurementPortal(sessionId: string, intentId: string, contactId: string) {
+    return uploadInvoiceToProcurementPortalTransition(
+      this.mutableState(sessionId),
+      intentId,
+      contactId,
+    );
   }
 
   revokeAlternateAccess(sessionId: string, intentId: string, reason: string) {
@@ -186,12 +207,31 @@ export class InMemoryDemoApi implements DemoApi {
     return this.store.resumeIntent(this.sessionId, intentId);
   }
 
-  async grantAlternateAccess(
+  async setRecoveryScenario(scenario: RecoveryScenarioId) {
+    return this.store.setRecoveryScenario(this.sessionId, scenario);
+  }
+
+  async createScopedAccessGrant(
     intentId: string,
+    contactId: string,
+    expirationMinutes: number,
+    scope: 'read_invoice_only',
     issuedVia: 'webmcp_agent' | 'user',
     userConfirmation: string,
   ) {
-    return this.store.grantAlternateAccess(this.sessionId, intentId, issuedVia, userConfirmation);
+    return this.store.createScopedAccessGrant(
+      this.sessionId,
+      intentId,
+      contactId,
+      expirationMinutes,
+      scope,
+      issuedVia,
+      userConfirmation,
+    );
+  }
+
+  async uploadInvoiceToProcurementPortal(intentId: string, contactId: string) {
+    return this.store.uploadInvoiceToProcurementPortal(this.sessionId, intentId, contactId);
   }
 
   async revokeAlternateAccess(intentId: string, reason: string) {

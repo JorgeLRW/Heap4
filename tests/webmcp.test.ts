@@ -58,8 +58,9 @@ async function runWebMCPTests() {
 
   const blockedTools = await modelContext.getTools();
   assert(
-    blockedTools.some((tool) => tool.name === 'deliver_by_alternate_route'),
-    'A broken primary route exposes the alternate route rather than only a status view',
+    blockedTools.some((tool) => tool.name === 'create_scoped_access_grant') &&
+      blockedTools.some((tool) => tool.name === 'upload_invoice_to_procurement_portal'),
+    'A broken primary route exposes primitive actions rather than a prescribed recovery plan',
   );
 
   const listTool = baseTools.find((tool) => tool.name === 'list_active_intents')!;

@@ -1,9 +1,11 @@
 import type {
-  AlternateRouteResult,
   DemoApi,
   DemoSessionState,
   InvoiceAccessView,
+  ProcurementPortalReceipt,
+  RecoveryScenarioId,
   RepairJob,
+  ScopedAccessGrantResult,
 } from '../../shared/demoApiTypes';
 import type { Intent } from './intentTypes';
 import { getDemoSessionId } from './session';
@@ -81,20 +83,44 @@ export class HttpDemoApi implements DemoApi {
     );
   }
 
-  grantAlternateAccess(
+  setRecoveryScenario(scenario: RecoveryScenarioId) {
+    return requestJson<DemoSessionState>('/api/demo/recovery-scenario', {
+      method: 'POST',
+      body: JSON.stringify({ scenario }),
+    });
+  }
+
+  createScopedAccessGrant(
     intentId: string,
+    contactId: string,
+    expirationMinutes: number,
+    scope: 'read_invoice_only',
     issuedVia: 'webmcp_agent' | 'user',
     userConfirmation: string,
   ) {
-    return requestJson<AlternateRouteResult>(
-      `/api/demo/intents/${encodeURIComponent(intentId)}/alternate-route`,
-      { method: 'POST', body: JSON.stringify({ issuedVia, userConfirmation }) },
+    return requestJson<ScopedAccessGrantResult>(
+      `/api/demo/intents/${encodeURIComponent(intentId)}/access-grants`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ contactId, expirationMinutes, scope, issuedVia, userConfirmation }),
+      },
     );
+  }
+
+  uploadInvoiceToProcurementPortal(intentId: string, contactId: string) {
+    return requestJson<{
+      success: boolean;
+      state: DemoSessionState;
+      receipt: ProcurementPortalReceipt;
+    }>(`/api/demo/intents/${encodeURIComponent(intentId)}/procurement-portal`, {
+      method: 'POST',
+      body: JSON.stringify({ contactId }),
+    });
   }
 
   revokeAlternateAccess(intentId: string, reason: string) {
     return requestJson<{ success: boolean; state: DemoSessionState }>(
-      `/api/demo/intents/${encodeURIComponent(intentId)}/alternate-route/revoke`,
+      `/api/demo/intents/${encodeURIComponent(intentId)}/access-grants/revoke`,
       { method: 'POST', body: JSON.stringify({ reason }) },
     );
   }

@@ -6,11 +6,15 @@
  */
 
 import type {
+  AuthorizedContact,
+  CustomerDeliveryPolicy,
   DemoApi,
   DemoBuild,
   DemoSessionState,
   InvoiceAccessGrant,
   InvoiceAccessView,
+  ProcurementPortalReceipt,
+  RecoveryScenarioId,
   RepairJob,
 } from '../../shared/demoApiTypes';
 import { evaluateGrantUsability } from '../../shared/accessGrants';
@@ -37,6 +41,11 @@ export class IntentRuntime {
   private repairJob: RepairJob | null = null;
   private accessGrant: InvoiceAccessGrant | null = null;
   private recoveryApproval: DemoSessionState['recoveryApproval'] = null;
+  private recoveryScenario: RecoveryScenarioId = 'portal_outage';
+  private customerPolicy: CustomerDeliveryPolicy | null = null;
+  private authorizedContacts: AuthorizedContact[] = [];
+  private procurementPortalAvailable = false;
+  private procurementPortalReceipt: ProcurementPortalReceipt | null = null;
   /** Held in memory only; the plaintext token is never persisted server-side. */
   private lastIssuedAccessUrl: string | null = null;
   private invoiceCreateCount = 0;
@@ -94,6 +103,26 @@ export class IntentRuntime {
 
   public getRecoveryApproval(): DemoSessionState['recoveryApproval'] {
     return this.recoveryApproval;
+  }
+
+  public getRecoveryScenario(): RecoveryScenarioId {
+    return this.recoveryScenario;
+  }
+
+  public getCustomerPolicy(): CustomerDeliveryPolicy | null {
+    return this.customerPolicy;
+  }
+
+  public getAuthorizedContacts(): AuthorizedContact[] {
+    return this.authorizedContacts;
+  }
+
+  public getProcurementPortalAvailability(): boolean {
+    return this.procurementPortalAvailable;
+  }
+
+  public getProcurementPortalReceipt(): ProcurementPortalReceipt | null {
+    return this.procurementPortalReceipt;
   }
 
   public hasUsableAccessGrant(): boolean {
@@ -157,18 +186,43 @@ export class IntentRuntime {
     return { success: result.success, intent };
   }
 
-  /** Reaches the user's outcome through the allowlisted alternate route. */
-  public async grantAlternateAccess(
+  public async setRecoveryScenario(scenario: RecoveryScenarioId): Promise<void> {
+    this.applyServerState(await this.api.setRecoveryScenario(scenario));
+  }
+
+  /** Executes one primitive action after the server verifies policy and scope. */
+  public async createScopedAccessGrant(
     intentId: string,
+    contactId: string,
+    expirationMinutes: number,
+    scope: 'read_invoice_only',
     userConfirmation: string,
     issuedVia: 'webmcp_agent' | 'user' = 'user',
   ): Promise<{ grant: InvoiceAccessGrant; accessUrl: string; intent: Intent }> {
-    const result = await this.api.grantAlternateAccess(intentId, issuedVia, userConfirmation);
+    const result = await this.api.createScopedAccessGrant(
+      intentId,
+      contactId,
+      expirationMinutes,
+      scope,
+      issuedVia,
+      userConfirmation,
+    );
     this.lastIssuedAccessUrl = result.accessUrl;
     this.applyServerState(result.state);
     const intent = this.intents.get(intentId);
     if (!intent) throw new Error(`Server did not return intent ${intentId}`);
     return { grant: result.grant, accessUrl: result.accessUrl, intent };
+  }
+
+  public async uploadInvoiceToProcurementPortal(
+    intentId: string,
+    contactId: string,
+  ): Promise<{ receipt: ProcurementPortalReceipt; intent: Intent }> {
+    const result = await this.api.uploadInvoiceToProcurementPortal(intentId, contactId);
+    this.applyServerState(result.state);
+    const intent = this.intents.get(intentId);
+    if (!intent) throw new Error(`Server did not return intent ${intentId}`);
+    return { receipt: result.receipt, intent };
   }
 
   public async revokeAlternateAccess(intentId: string, reason: string): Promise<Intent> {
@@ -243,6 +297,11 @@ export class IntentRuntime {
     this.repairJob = state.repairJob;
     this.accessGrant = state.accessGrant;
     this.recoveryApproval = state.recoveryApproval;
+    this.recoveryScenario = state.recoveryScenario;
+    this.customerPolicy = state.customerPolicy;
+    this.authorizedContacts = state.authorizedContacts;
+    this.procurementPortalAvailable = state.procurementPortalAvailable;
+    this.procurementPortalReceipt = state.procurementPortalReceipt;
     this.invoiceCreateCount = state.invoiceCreateCount;
     this.intents.clear();
     if (state.intent) this.intents.set(state.intent.id, state.intent);

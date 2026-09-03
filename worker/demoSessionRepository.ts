@@ -1,5 +1,5 @@
 import type { DemoSessionState } from '../src/shared/demoApiTypes';
-import { createInitialDemoState } from '../src/shared/demoTransitions';
+import { createInitialDemoState, upgradeDemoState } from '../src/shared/demoTransitions';
 
 export interface D1PreparedStatementLike {
   bind(...values: unknown[]): D1PreparedStatementLike;
@@ -51,7 +51,7 @@ export class DemoSessionRepository {
       return initial;
     }
 
-    const parsed = JSON.parse(row.state_json) as DemoSessionState;
+    const parsed = upgradeDemoState(JSON.parse(row.state_json) as DemoSessionState);
     if (parsed.sessionId !== sessionId) {
       throw new Error('Stored demo session did not match the requested session.');
     }

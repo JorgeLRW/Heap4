@@ -137,14 +137,29 @@ app.post('/api/demo/intents/:intentId/resume', (req, res) => {
   }
 });
 
-app.post('/api/demo/intents/:intentId/alternate-route', async (req, res) => {
+app.post('/api/demo/recovery-scenario', (req, res) => {
+  try {
+    const scenario = req.body?.scenario;
+    if (scenario !== 'portal_outage' && scenario !== 'portal_only') {
+      throw new Error('Recovery scenario must be portal_outage or portal_only.');
+    }
+    res.json(demoStore.setRecoveryScenario(getDemoSessionId(req), scenario));
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/demo/intents/:intentId/access-grants', async (req, res) => {
   try {
     const issuedVia = req.body?.issuedVia === 'webmcp_agent' ? 'webmcp_agent' : 'user';
     const userConfirmation = String(req.body?.userConfirmation || '').slice(0, 200);
     res.json(
-      await demoStore.grantAlternateAccess(
+      await demoStore.createScopedAccessGrant(
         getDemoSessionId(req),
         req.params.intentId,
+        String(req.body?.contactId || ''),
+        Number(req.body?.expirationMinutes),
+        req.body?.scope,
         issuedVia,
         userConfirmation,
       ),
@@ -154,7 +169,21 @@ app.post('/api/demo/intents/:intentId/alternate-route', async (req, res) => {
   }
 });
 
-app.post('/api/demo/intents/:intentId/alternate-route/revoke', (req, res) => {
+app.post('/api/demo/intents/:intentId/procurement-portal', (req, res) => {
+  try {
+    res.json(
+      demoStore.uploadInvoiceToProcurementPortal(
+        getDemoSessionId(req),
+        req.params.intentId,
+        String(req.body?.contactId || ''),
+      ),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+app.post('/api/demo/intents/:intentId/access-grants/revoke', (req, res) => {
   try {
     const reason = String(req.body?.reason || '').slice(0, 200) || 'No reason supplied.';
     res.json(demoStore.revokeAlternateAccess(getDemoSessionId(req), req.params.intentId, reason));

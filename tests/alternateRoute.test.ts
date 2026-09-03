@@ -52,37 +52,100 @@ async function runAlternateRouteTests() {
 
   let names = await toolNames(modelContext);
   assert(
-    names.includes('get_recovery_options') && names.includes('deliver_by_alternate_route'),
-    'The recovery plan and alternate route appear as soon as the primary route breaks',
+    names.includes('inspect_customer_delivery_policy') &&
+      names.includes('list_authorized_contacts') &&
+      names.includes('create_scoped_access_grant'),
+    'A blocked intent exposes policy facts, contacts, and a primitive grant action',
+  );
+  assert(
+    !names.includes('get_recovery_options') && !names.includes('deliver_by_alternate_route'),
+    'The site does not prescribe or package a recovery solution for the agent',
   );
   assert(
     !names.includes('revoke_alternate_delivery') && !names.includes('resume_intent'),
     'Revoke and resume stay absent while no link exists and no repair is deployed',
   );
 
-  const plan = await modelContext.executeTool(
-    'get_recovery_options',
+  const policy = await modelContext.executeTool(
+    'inspect_customer_delivery_policy',
     JSON.stringify({ intentId: 'int_2841' }),
   );
-  assert(plan.outcome.includes('Acme Corp can read invoice'), 'The agent can explain the preserved outcome');
+  assert(policy.customerId === 'ACME', 'The agent can inspect the customer policy as evidence');
   assert(
-    plan.approvedAlternates[0].requiresUserConfirmation === true,
-    'The recovery plan requires user confirmation before an external action',
+    policy.rules.some((rule: string) => rule.toLowerCase().includes('temporary external links')),
+    'The policy is returned as semantic evidence rather than a recovery plan',
+  );
+
+  const contacts = await modelContext.executeTool(
+    'list_authorized_contacts',
+    JSON.stringify({ intentId: 'int_2841' }),
+  );
+  assert(contacts.contacts.length === 2, 'The agent can inspect candidate contacts without receiving a plan');
+
+  const failedPortal = await modelContext.executeTool(
+    'upload_invoice_to_procurement_portal',
+    JSON.stringify({ intentId: 'int_2841', contactId: 'contact_dana_lee' }),
+  );
+  assert(
+    failedPortal.error === 'capability_execution_failed' && failedPortal.message.includes('unavailable'),
+    'An unexpected portal failure is returned as evidence so the agent can replan',
   );
 
   const missingConfirmation = await modelContext.executeTool(
-    'deliver_by_alternate_route',
-    JSON.stringify({ intentId: 'int_2841', userConfirmation: '' }),
+    'create_scoped_access_grant',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      expirationMinutes: 60,
+      scope: 'read_invoice_only',
+      userConfirmation: '',
+    }),
   );
   assert(
     missingConfirmation.error === 'user_confirmation_required',
     'The agent cannot issue a share link without an explicit user confirmation',
   );
 
-  // The agent reaches the outcome without waiting for engineering.
+  const ineligibleContact = await modelContext.executeTool(
+    'create_scoped_access_grant',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_billing_archive',
+      expirationMinutes: 60,
+      scope: 'read_invoice_only',
+      userConfirmation: 'I approve temporary invoice access.',
+    }),
+  );
+  assert(
+    ineligibleContact.error === 'policy_verification_failed',
+    'The server rejects an archival contact even when the agent proposes it',
+  );
+
+  const excessiveExpiration = await modelContext.executeTool(
+    'create_scoped_access_grant',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      expirationMinutes: 61,
+      scope: 'read_invoice_only',
+      userConfirmation: 'I approve temporary invoice access.',
+    }),
+  );
+  assert(
+    excessiveExpiration.error === 'policy_verification_failed',
+    'The server rejects a grant longer than the natural-language policy permits',
+  );
+
+  // The agent replans after the portal failure and composes a legal primitive call.
   const routeResult = await modelContext.executeTool(
-    'deliver_by_alternate_route',
-    JSON.stringify({ intentId: 'int_2841', userConfirmation: 'I approve the one-hour read-only share link.' }),
+    'create_scoped_access_grant',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      expirationMinutes: 60,
+      scope: 'read_invoice_only',
+      userConfirmation: 'I approve the one-hour read-only share link for Dana.',
+    }),
   );
   await flushSurfaceSync();
 
@@ -120,7 +183,9 @@ async function runAlternateRouteTests() {
 
   names = await toolNames(modelContext);
   assert(
-    !names.includes('deliver_by_alternate_route') && names.includes('revoke_alternate_delivery'),
+    !names.includes('create_scoped_access_grant') &&
+      !names.includes('upload_invoice_to_procurement_portal') &&
+      names.includes('revoke_access_grant'),
     'Issuing a link withdraws the issue capability and exposes the revoke capability',
   );
 
@@ -152,7 +217,14 @@ async function runAlternateRouteTests() {
 
   let secondGrantRejected = false;
   try {
-    await intentRuntime.grantAlternateAccess('int_2841', 'I approve a replacement link.', 'user');
+    await intentRuntime.createScopedAccessGrant(
+      'int_2841',
+      'contact_dana_lee',
+      60,
+      'read_invoice_only',
+      'I approve a replacement link.',
+      'user',
+    );
   } catch {
     secondGrantRejected = true;
   }
@@ -165,7 +237,7 @@ async function runAlternateRouteTests() {
 
   names = await toolNames(modelContext);
   assert(
-    names.includes('resume_intent') && names.includes('revoke_alternate_delivery'),
+    names.includes('resume_intent') && names.includes('revoke_access_grant'),
     'A deployed repair adds resume without silently dropping the live workaround',
   );
   assert(
@@ -190,7 +262,7 @@ async function runAlternateRouteTests() {
 
   // The agent cleans up the capability it created.
   const revokeResult = await modelContext.executeTool(
-    'revoke_alternate_delivery',
+    'revoke_access_grant',
     JSON.stringify({ intentId: 'int_2841', reason: 'The invoice was emailed after the repair shipped.' }),
   );
   await flushSurfaceSync();
@@ -201,8 +273,39 @@ async function runAlternateRouteTests() {
 
   names = await toolNames(modelContext);
   assert(
-    !names.includes('revoke_alternate_delivery') && !names.includes('resume_intent'),
+    !names.includes('revoke_access_grant') && !names.includes('resume_intent'),
     'The dynamic surface returns to the base tools once nothing is outstanding',
+  );
+
+  // The judge can change policy without changing the failure, goal, or user request.
+  await intentRuntime.resetDemo();
+  await intentRuntime.setRecoveryScenario('portal_only');
+  intentRuntime.createIntent(createInvoiceIntent());
+  await intentRuntime.executeSendInvoiceWorkflow('int_2841');
+  await flushSurfaceSync();
+
+  const prohibitedGrant = await modelContext.executeTool(
+    'create_scoped_access_grant',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      expirationMinutes: 30,
+      scope: 'read_invoice_only',
+      userConfirmation: 'I approve temporary invoice access.',
+    }),
+  );
+  assert(
+    prohibitedGrant.error === 'policy_verification_failed' && prohibitedGrant.message.includes('prohibits'),
+    'Changing policy makes the previously valid external-link plan illegal',
+  );
+
+  const portalResult = await modelContext.executeTool(
+    'upload_invoice_to_procurement_portal',
+    JSON.stringify({ intentId: 'int_2841', contactId: 'contact_dana_lee' }),
+  );
+  assert(
+    portalResult.ok === true && portalResult.via === 'procurement_portal',
+    'The same failed outcome is recovered through a different plan under portal-only policy',
   );
 
   clearTestModelContext();

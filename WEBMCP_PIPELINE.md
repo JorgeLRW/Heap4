@@ -2,7 +2,7 @@
 
 Heap 4 is a working vertical slice of one product promise:
 
-> When a user workflow fails, preserve the outcome the user was after, offer the browser agent every route that can still reach it, and expose each capability only while the server would authorize it.
+> When a user workflow fails, preserve the outcome, expose current evidence and small capabilities, let an agent propose a route that was not packaged in advance, and verify every step server-side.
 
 The governing invariant is:
 
@@ -21,7 +21,7 @@ deliver it:
 goal: {
   outcome: 'Acme Corp can read invoice INV-2841 for $4,850',
   primaryRoute: 'email_delivery',
-  alternateRoutes: ['secure_share_link'],
+  alternateRoutes: ['secure_share_link', 'procurement_portal'],
 }
 ```
 
@@ -61,7 +61,7 @@ that state — and, critically, a set of actions that changes with it:
 3. The agent invokes a tool through the browser-mediated
    `document.modelContext.executeTool()` path.
 4. The callback calls Heap 4's same-origin API and returns structured state.
-5. Four further tools register and deregister themselves as server state moves.
+5. Six further tools register and deregister themselves as server state moves.
 
 Heap 4 does not install a fake production `modelContext`. If the browser has no
 native WebMCP support, the application still works as a normal site and clearly
@@ -86,7 +86,7 @@ link intentionally grants controlled access to its recipient.
 
 Two things follow. First, each tool result is an explicit disclosure decision:
 `inspect_intent` returns the grant's metadata but never its `tokenHash`, and
-`deliver_by_alternate_route` strips the plaintext URL from the audit log.
+`create_scoped_access_grant` strips the plaintext URL from the audit log.
 Second, the dynamic surface is an authorization-aware discovery boundary, not
 the enforcement boundary. Because tools are registered from server-authoritative
 state, the agent normally discovers only actions relevant to the current state;
@@ -102,20 +102,20 @@ copy of the data, and its own authorization model.
 `onIntentStatusChange` is the only place dynamic registration happens, and it is
 written as a pure projection of server-authoritative state onto a tool list:
 
-| Server state | `get_recovery_options` | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
+| Server state | Policy/contact evidence | Grant/portal primitives | `revoke_access_grant` | `resume_intent` |
 | --- | :---: | :---: | :---: | :---: |
 | `active` | absent | absent | absent | absent |
 | `blocked` | registered | registered | absent | absent |
-| `mitigated` | absent | absent | registered | absent |
-| `resumable` | absent | absent | registered | registered |
-| `completed` | absent | absent | absent | absent |
+| `mitigated` | registered | absent | if grant is live | absent |
+| `resumable` | absent | absent | if grant is live | registered |
+| `completed` | absent | absent | if grant is live | absent |
 
 The properties this buys:
 
 - The agent normally cannot discover an action that is invalid for the current
   state. Stale tool handles and race conditions remain possible, so every
   mutation still needs server-side enforcement.
-- Issuing a share link withdraws the issuing capability, so double-issuance is
+- Reaching the outcome withdraws both creation capabilities, so double recovery is
   structurally impossible rather than merely validated.
 - The revoke capability outlives completion, so a workaround is always
   retractable.
@@ -139,44 +139,42 @@ The invoice flow uses the server service at
 This is not a client-only error banner. The direct service path, HTTP failure,
 and persisted session state use the same failure boundary.
 
-## Route A: the alternate route
+## Route A: agent-planned mitigation
 
-`get_recovery_options` is the agent's first step. It returns the preserved
-outcome, the primary route's condition, the approved alternate's effect and
-constraints, and the fact that an explicit user confirmation is required.
+No tool returns a recovery option or packages an alternate route. The agent
+must combine four independent surfaces:
 
-`deliver_by_alternate_route` mints a capability token for the existing invoice
-only after it receives a bounded confirmation statement from the user's agent
-conversation. The server persists only the route, confirmation time, and
-conversation channel; it never persists the user's raw words. This is a
-delegated-approval record, not a claim that the server independently verifies
-spoken consent.
+- `inspect_intent` supplies the desired postcondition, partial state, and invariants.
+- `inspect_customer_delivery_policy` supplies the customer's natural-language policy as evidence.
+- `list_authorized_contacts` supplies current people, roles, and notes without declaring action eligibility.
+- `create_scoped_access_grant` and `upload_invoice_to_procurement_portal` are primitive mutations with explicit parameters and effects.
 
-The server enforces that:
+The default policy prefers the procurement portal but permits a temporary link
+for a designated AP approver if the portal is unavailable. The portal tool then
+returns a live `capability_execution_failed` result. The application does not
+return a fallback plan. The agent must reinterpret the remaining evidence,
+select Dana rather than the archival mailbox, determine a compliant duration
+and scope, explain the disclosure change, and obtain confirmation.
 
-- The intent is `blocked`; a healthy or already-mitigated route needs no new workaround.
-- `secure_share_link` is in the intent's `alternateRoutes` allowlist.
-- The original invoice exists, and exactly one invoice record exists.
-- No usable grant is already outstanding.
+For `create_scoped_access_grant`, the server independently enforces that:
 
-What it deliberately does **not** do:
+- The intent is blocked and the original invoice exists exactly once.
+- Current policy permits external links.
+- The selected contact belongs to the customer, is active, and is eligible for external access.
+- The scope is exactly `read_invoice_only`.
+- The requested integer duration does not exceed the policy maximum.
+- Explicit confirmation exists and no usable grant is already outstanding.
 
-- It does not mark the invoice `sent`. Delivery did not happen.
-- It does not change the amount or create a second invoice.
-- It does not touch the build, the source, or the repair job.
-- It does not move the intent to `completed`. `mitigated` is a distinct state
-  meaning "the user is unblocked and the defect is still open".
+The portal primitive independently verifies policy, contact eligibility,
+artifact identity, and live channel availability. Under the selectable
+`portal_only` policy, external links are prohibited and the portal is available,
+so the same failed intent and user request require a different valid plan.
 
-The token is scoped to `read_invoice_only`, expires after one hour, is
-revocable, and is persisted only as a SHA-256 digest. The plaintext URL is
-returned once, at issue time, and is stripped from the tool audit log. The
-recipient endpoint `GET /api/demo/invoice-access/:token` is intentionally
-session-free, because the recipient is not the authenticated user; authority
-comes from the token's scope, expiry, and revocation state.
-
-`revoke_alternate_delivery` withdraws the grant, drops the token index, and
-returns a `mitigated` intent to `blocked` — the workaround is gone and the
-primary route was never repaired.
+Neither mitigation marks email as sent, changes the amount, creates a second
+invoice, repairs the defect, or moves the intent to `completed`. A share token
+is stored only as a SHA-256 digest, returned once, and revocable through
+`revoke_access_grant`. The session-free recipient endpoint stamps
+`firstAccessedAt` on first successful resolution.
 
 ## Route B: repair pipeline and sandbox boundary
 
@@ -249,13 +247,14 @@ was actually repaired, any outstanding grant, and the no-duplicate invariant.
 - Start from `demo-build-a` and send the invoice.
 - Observe the real HTTP 500 and source context at `DeliveryService.ts:42`.
 - Reload and confirm the blocked intent persists.
-- Discover the base WebMCP tools plus `deliver_by_alternate_route`.
-- Ask the browser agent what happened and optionally attach context.
-- Reach the outcome by the alternate route; confirm the invoice is still not
-  sent, the amount is unchanged, and the status is `mitigated`.
+- Discover the base WebMCP tools plus policy evidence, contacts, and both recovery primitives.
+- Keep **Portal outage** selected and give the agent an outcome plus natural-language constraints.
+- Confirm it reads policy and contacts, attempts the preferred portal, observes the outage, and replans.
+- Confirm the server rejects the archival contact and any duration over the policy maximum.
+- Approve the agent's compliant grant for Dana; confirm the invoice is still not sent, the amount is unchanged, and the status is `mitigated`.
 - Open the returned link and confirm the scoped recipient view.
-- Confirm `deliver_by_alternate_route` is withdrawn and
-  `revoke_alternate_delivery` has appeared.
+- Confirm both creation primitives are withdrawn and `revoke_access_grant` has appeared.
+- Reset, select **Portal only**, repeat the same failure and user request, and confirm the grant is denied while portal delivery succeeds.
 - Watch Engineering Review progress from sandbox creation through validation,
   including the command transcripts and write-scope audit.
 - Confirm the job stops at `ready_for_review` until promotion.

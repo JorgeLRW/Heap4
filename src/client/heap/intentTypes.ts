@@ -19,7 +19,7 @@ export interface IntentGoal {
 }
 
 /** How a goal's outcome can be reached. A broken route is not a lost goal. */
-export type GoalRoute = 'email_delivery' | 'secure_share_link';
+export type GoalRoute = 'email_delivery' | 'secure_share_link' | 'procurement_portal';
 
 export interface IntentEntities {
   invoiceId: string;

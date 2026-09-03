@@ -9,9 +9,9 @@ export function createInvoiceIntent(): Intent {
       description: 'Acme Corp can access invoice INV-2841',
       outcome: 'Acme Corp can read invoice INV-2841 for $4,850',
       successCondition:
-        "invoice.deliveryStatus === 'sent' || invoice.accessGrantedVia === 'secure_share_link'",
+        "invoice.deliveryStatus === 'sent' || accessGrant.active || procurementPortalReceipt.verifiedAt exists",
       primaryRoute: 'email_delivery',
-      alternateRoutes: ['secure_share_link'],
+      alternateRoutes: ['secure_share_link', 'procurement_portal'],
     },
     entities: { invoiceId: 'INV-2841', customerId: 'ACME', amount: 4850 },
     progress: { invoiceCreated: false, deliveryCompleted: false, completedSteps: [] },

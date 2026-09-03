@@ -1,18 +1,18 @@
 # Heap 4
 
-**A state-aware capability runtime: web applications expose dynamic, state-gated tool surfaces that any WebMCP agent can discover in-session, navigate through degraded mitigation states, and reconcile once the primary route heals.**
+**An open-world recovery runtime: applications expose outcomes, evidence, primitive capabilities, and invariants; an agent proposes a workflow that Heap 4 verifies one step at a time.**
 
-We don't use an LLM to invent business logic — that belongs in a deterministic, server-side state machine. Heap 4 is that state machine, plus the WebMCP surface that lets any compliant agent reach it without a bespoke integration.
+Developers define what is legal. The agent discovers what will work.
 
 ## What the agent actually does — and doesn't do
 
-Be precise about this, because it's easy to overclaim: **the agent makes zero policy decisions.** Every constraint — the allowlist, the scope, the expiry, the duplicate-issuance check, the confirmation requirement — is enforced server-side, identically whether the caller is an LLM, a script, or a curl command. Trace an actual call: `get_recovery_options` is a read. `deliver_by_alternate_route` takes a confirmation string and then re-validates status, allowlist, and invariants regardless of what that string says. The agent's job is translation — structured state into a conversation, a user's answer back into the next call — not reasoning about what's allowed.
+The agent performs **semantic planning, not authorization**. It reads a natural-language customer policy, distinguishes an acting approver from an archival mailbox, selects primitive actions and parameters, asks for narrowly scoped confirmation when disclosure changes, observes execution, and replans when a capability fails. Heap 4 independently enforces the selected contact, scope, expiration, confirmation, channel policy, workflow state, and invoice invariants.
 
-That is deliberate, not a limitation to apologize for. Non-deterministic behavior around data disclosure and capability grants is a liability, not a feature; a security or compliance reviewer should be relieved, not disappointed, that the LLM cannot invent a route. If you could replace the agent with a Temporal workflow, a Step Functions saga, and a Slack approval card and lose nothing — you're right, and for a single app with the user present, you should. A two-button web notification resolves this exact scenario with less latency, no token cost, and no prompt-injection surface.
+Heap 4 never treats the model's policy interpretation as authority. A model may propose a one-hour grant for Dana; the server accepts it only if the current policy permits external links, Dana is eligible, the requested scope is exact, and the duration is within the configured maximum. Invalid proposals become structured observations the agent can use to revise its plan.
 
-So why involve an agent at all? Because the actual moat isn't reasoning — it's the $N \times M$ integration problem. If fifty SaaS vendors each build their own failure-recovery workflow, a user coordinating across them needs fifty bespoke dashboards, notification schemes, and webhook endpoints. WebMCP is a standard, in-session contract for *discovering* an interrupted intent and its currently-authorized recovery capabilities — reachable by any compliant agent, with no per-vendor connector. That's a protocol claim, not an intelligence claim.
+An LLM is not mathematically necessary. A symbolic planner could solve the same problem if every future policy, preference, semantic relationship, precondition, and effect were formalized. Heap 4 targets the open-world case where those combinations cannot reasonably be enumerated when the application is built. WebMCP makes the current capabilities discoverable; the model handles semantic search over possible compositions; deterministic software retains authority.
 
-There is one place a general agent adds something a static two-button card structurally cannot: answering open-ended follow-up questions grounded in the same state data the tools already return — "what timezone does this expire in," "can they forward this link to someone else," "has Acme already opened it." A card can't have that conversation without the site author hand-coding an FAQ for every edge case; an LLM reading `get_recovery_options`/`inspect_intent` output can. That last question isn't rhetorical here — the share grant tracks a real `firstAccessedAt` timestamp server-side precisely so the answer is a fact, not a guess.
+The demo proves the distinction by holding the failure, outcome, and user request constant while changing customer policy. Under the default policy, the agent attempts the preferred procurement portal, observes that it is unavailable, and replans to a confirmed temporary grant for Dana. Under the portal-only policy, that same grant is rejected and the portal action succeeds. There is no `get_recovery_options`, `recover_invoice`, or packaged alternate-delivery tool containing the answer.
 
 ## The thesis
 
@@ -22,8 +22,9 @@ Most error handling conflates the two. "Send invoice" fails, so the workflow is 
 
 ```text
 outcome:  Acme Corp can read invoice INV-2841
-  ├─ route: email_delivery      ← broken at DeliveryService.ts:42
-  └─ route: secure_share_link   ← allowlisted, available right now
+  ├─ route: email_delivery             ← broken at DeliveryService.ts:42
+  ├─ capability: procurement_portal    ← preferred, may fail at execution
+  └─ capability: scoped_access_grant   ← parameterized and policy-verified
 ```
 
 ## This invoice is one instance, not the whole claim
@@ -35,23 +36,15 @@ The *pattern* here isn't invoice-specific. It's four pieces, defined generically
 - `onIntentStatusChange`'s dynamic tool gating, which reads intent status and grant state, not invoice fields,
 - a capability-grant shape (scoped, expiring, revocable, access-tracked) that isn't about invoices either.
 
-Being precise about what that buys today, rather than overselling it: only one `GoalRoute` pair is actually implemented (`email_delivery` / `secure_share_link`), and the transition that grants access — `grantAlternateAccessTransition` in [demoTransitions.ts](src/shared/demoTransitions.ts) — is hardcoded against `state.invoice`, not a generic entity. `IntentGoal.kind` even has a second value, `'export_report'`, sitting in the type union — but it's a stub with zero logic behind it, not a second working workflow. I'm flagging that here so nobody has to find it and wonder if it's a hidden feature; it isn't.
+Being precise about what that buys today: two invoice recovery capabilities are implemented (`secure_share_link` and `procurement_portal`), with two selectable customer-policy scenarios. Their transitions are still hardcoded against `state.invoice`; this is not yet a generic domain planner. `Intent.kind` also contains `'export_report'`, but it remains a type-level stub with no transition logic.
 
-So the honest claim is: the lifecycle, the gating mechanism, and the grant shape would carry over to a different failure — a report export that times out, a payment that declines, a calendar invite that can't send — because none of that logic is written in terms of invoices. Wiring up a second route or a second `kind` is new code, not a config flag. This repo proves the mechanism once, completely, rather than proving it shallowly five times.
+The honest claim is that the planner/verifier boundary generalizes: a new domain must supply its own primitive actions, state projections, and deterministic verifiers. Heap 4 does not infer safe server mutations from prose.
 
 ## The dynamic tool surface
 
-This is the part that is native to WebMCP and impossible in a static tool manifest. Heap 4's registered tools are a pure function of server state:
+Heap 4's registered tools are a projection of server state. While an intent is blocked, WebMCP exposes policy and contact evidence plus the `create_scoped_access_grant` and `upload_invoice_to_procurement_portal` primitives. Once one succeeds, both creation capabilities disappear. `revoke_access_grant` exists only while a usable grant is outstanding, and `resume_intent` exists only after a reviewed repair is deployed.
 
-| Server state | `get_recovery_options` | `deliver_by_alternate_route` | `revoke_alternate_delivery` | `resume_intent` |
-| --- | :---: | :---: | :---: | :---: |
-| `active` — nothing wrong | absent | absent | absent | absent |
-| `blocked` — primary route broken | **registered** | **registered** | absent | absent |
-| `mitigated` — link live, defect open | absent | absent | **registered** | absent |
-| `resumable` — repair deployed | absent | absent | **registered** | **registered** |
-| `completed` — nothing outstanding | absent | absent | absent | absent |
-
-The agent normally cannot discover an action that is invalid for the current state. Stale tool handles and race conditions remain possible, so every mutation still needs server-side enforcement. `deliver_by_alternate_route` withdraws itself after a link exists, while the server also rejects duplicate issuance. `revoke_alternate_delivery` persists past completion, so a workaround is always retractable.
+The tool surface is state-gated, but policy remains server-enforced. Coarse lifecycle-invalid actions do not exist in the schema; parameter-level mistakes and races are still rejected by the server.
 
 This is a HATEOAS-style property applied to tools instead of hypermedia links: valid next actions are discoverable from the current state, and invalid ones are structurally absent rather than merely discouraged by a system prompt. Most agent stacks dump every tool definition into the prompt and rely on the model not to call one out of sequence. Here, an out-of-sequence call isn't a prompting failure to guard against \u2014 the tool doesn't exist yet.
 
@@ -65,11 +58,12 @@ One claim worth qualifying rather than asserting: because the tool executes in t
 2. The server persists exactly one invoice, then executes a reproducible delivery-provider defect and returns HTTP 500.
 3. Heap 4 stores the outcome, the routes that could reach it, partial progress, request ID, build, stack, source location, and protected invariants.
 4. A browser agent enters cold, discovers the interrupted workflow, and finds it can act — not just report.
-5. **Route A (seconds, user-confirmed):** the agent calls `get_recovery_options`, explains the safe route, and receives the user's explicit confirmation. It then calls `deliver_by_alternate_route`. The server records the approved route but not the user's words, and mints a scoped, expiring, revocable share link. Acme can read the invoice now. The invoice is *not* marked sent, the amount is untouched, no second invoice exists, and the defect is still open. The intent becomes `mitigated`, not `completed`.
-6. **Route B (in parallel):** a bounded repair job reproduces the failure in a job-scoped sandbox, produces a patch, runs the affected checks and a write-scope audit, and waits at `ready_for_review`.
-7. A human reviews the validated artifact and promotes the candidate.
-8. `resume_intent` appears. The agent runs only the missing delivery step and verifies the invoice was sent without duplication.
-9. The agent revokes the link it issued. The share URL stops resolving immediately.
+5. The agent reads customer policy and candidate contacts, then attempts the policy-preferred procurement portal primitive.
+6. The portal reports an unexpected outage. No fallback plan was returned by the application.
+7. The agent interprets the remaining policy, selects Dana rather than the archival mailbox, proposes a 60-minute invoice-only grant, and obtains explicit confirmation.
+8. The server verifies every parameter and mints the scoped capability. The intent becomes `mitigated`, not `completed`.
+9. In parallel, a bounded repair job reaches `ready_for_review`; a human promotes it.
+10. `resume_intent` appears. The agent completes only the missing primary delivery step, verifies the outcome, and revokes the temporary grant.
 
 The website never edits its own source, and the browser agent never receives repository or deployment authority.
 
@@ -88,9 +82,11 @@ Base surface, always registered:
 
 Dynamic surface, registered only while the server would authorize it:
 
-- `get_recovery_options` — explain the outcome, approved recovery routes, constraints, and confirmation requirement without making a change.
-- `deliver_by_alternate_route` — after explicit user confirmation, reach the outcome another way while the primary route is broken.
-- `revoke_alternate_delivery` — withdraw the workaround capability.
+- `inspect_customer_delivery_policy` — return natural-language policy evidence, not a recovery plan.
+- `list_authorized_contacts` — return candidate contacts and business roles, not action eligibility.
+- `create_scoped_access_grant` — request a contact, duration, scope, and confirmation for independent verification.
+- `upload_invoice_to_procurement_portal` — attempt portal delivery and return live execution evidence, including outages.
+- `revoke_access_grant` — withdraw a temporary capability.
 - `resume_intent` — run only the unfinished step after an approved repair is deployed.
 
 Production registration is forwarded to the browser's real `document.modelContext.registerTool(...)`. The in-memory implementation in `src/webmcp/modelContext.ts` is installed by tests only and never attached to `document`, `window`, or `navigator`.
@@ -127,7 +123,7 @@ Ordinary failover answers no. The same email goes to the same inbox whether it w
 
 The alternate route here answers yes. Email lands permanently in an inbox; the share link is a revocable, time-boxed, read-only URL. Different access model, different exposure window, different party trusted with it. Swapping one for the other is a disclosure decision, not a routing decision, and disclosure decisions need a decision-maker at the moment they're made — not just an operator's default from months earlier.
 
-That is why the flow is three separate steps instead of one automatic branch: `get_recovery_options` explains what would change about who can see the invoice and for how long, the user gives an explicit confirmation, and only then does `deliver_by_alternate_route` mint the capability. The site still defines and enforces what's allowed at all — the allowlist, the scope, the expiry — the same way an operator defines valid failover targets. What's added is the one gate that matters: confirming that *this specific change in who can see the data* is acceptable *this time*.
+That is why the agent must explain its proposed disclosure change and obtain confirmation before calling `create_scoped_access_grant`. The site does not prescribe that solution, but it still enforces the contact, scope, expiry, confirmation, and current state before issuing anything.
 
 ## Authority boundaries
 
@@ -173,13 +169,13 @@ Because Cloudflare Workers Free does not include Containers, the public demo use
 2. Click **Send invoice** and confirm the HTTP 500 state.
 3. Close the recovery drawer and navigate to another area.
 4. Ask the browser agent: **“What happened to what I was doing?”**
-5. Confirm `list_active_intents`, `inspect_intent`, and `deliver_by_alternate_route` appear in the WebMCP inspector.
-6. Ask: **“Can you get it to them another way?”** Confirm a share link is returned, the invoice still reads *not sent*, and the status becomes `mitigated`.
-7. Open the returned link and confirm the recipient view renders the invoice.
-8. Confirm `deliver_by_alternate_route` is gone and `revoke_alternate_delivery` has appeared.
-9. Open **Engineering Review**, watch sandbox evidence reach `ready_for_review`, then approve promotion.
-10. Ask: **“Can you finish it now?”** Confirm `resume_intent` runs, the invoice becomes sent, and no duplicate exists.
-11. Ask: **“The email went out — revoke that link.”** Confirm the share URL stops resolving and the dynamic surface returns to the six base tools.
+5. In **Policy Gate**, select **Portal outage** and read the policy without changing the goal or failure.
+6. Ask: **“Get Acme the invoice before their review. Don't give anyone permanent access, and don't make me babysit it.”**
+7. Confirm the agent inspects policy and contacts, attempts `upload_invoice_to_procurement_portal`, observes the outage, and replans.
+8. Approve the proposed one-hour grant for Dana. Confirm `create_scoped_access_grant` returns a link and `revoke_access_grant` replaces both creation tools.
+9. Open the link and confirm the recipient view plus live `firstAccessedAt`.
+10. Reset and select **Portal only**. Repeat the same failure and request; confirm an external grant is rejected while portal upload succeeds.
+11. Open **Engineering Review**, approve the validated candidate, resume the missing primary step, and revoke any temporary grant.
 
 If the page reports that native WebMCP is unavailable, the normal application still works, but that browser is not a valid acceptance environment. Heap 4 intentionally does not install a JavaScript `modelContext` polyfill.
 
@@ -190,7 +186,7 @@ npm test
 npm run build
 ```
 
-The suite proves the real delivery-service failure, HTTP 500 capsule, server persistence, blocked-state guard, real local command execution, SHA-256 evidence, write-scope enforcement, cleanup, review requirement, the full dynamic capability lifecycle across all five intent states, capability-token scope and revocation, tamper rejection, invariant-safe mitigation and resume, and server-authoritative outcome verification.
+The suite proves the real delivery failure, persisted interruption, policy/contact evidence, archival-contact and excessive-expiry rejection, unexpected portal failure, successful replanning to a scoped grant, policy-switched portal delivery, capability-token security, dynamic tool lifecycle, human-gated repair, invariant-safe resume, and server-authoritative outcome verification.
 
 ## License
 

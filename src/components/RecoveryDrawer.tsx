@@ -37,9 +37,11 @@ interface RecoveryDrawerProps {
 }
 
 const DYNAMIC_SURFACE_TOOL_NAMES = [
-  'get_recovery_options',
-  'deliver_by_alternate_route',
-  'revoke_alternate_delivery',
+  'inspect_customer_delivery_policy',
+  'list_authorized_contacts',
+  'create_scoped_access_grant',
+  'upload_invoice_to_procurement_portal',
+  'revoke_access_grant',
   'resume_intent',
 ] as const;
 
@@ -102,6 +104,11 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const isResumable = currentIntent.status === 'resumable';
   const isCompleted = currentIntent.status === 'completed';
   const accessGrant = intentRuntime.getAccessGrant();
+  const customerPolicy = intentRuntime.getCustomerPolicy();
+  const authorizedContacts = intentRuntime.getAuthorizedContacts();
+  const recoveryScenario = intentRuntime.getRecoveryScenario();
+  const portalAvailable = intentRuntime.getProcurementPortalAvailability();
+  const portalReceipt = intentRuntime.getProcurementPortalReceipt();
   const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
   const issuedAccessUrl = intentRuntime.getLastIssuedAccessUrl();
   const primaryRouteHealthy = intentRuntime.getCurrentBuild() === 'demo-build-b';
@@ -113,23 +120,37 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   let expectedCurrentDynamicTools: DynamicSurfaceToolName[] = [];
   if (isBlocked) {
     previousSurfaceLabel = 'Healthy';
-    expectedCurrentDynamicTools = ['get_recovery_options', 'deliver_by_alternate_route'];
+    expectedCurrentDynamicTools = [
+      'inspect_customer_delivery_policy',
+      'list_authorized_contacts',
+      'create_scoped_access_grant',
+      'upload_invoice_to_procurement_portal',
+    ];
   } else if (isMitigated) {
     previousSurfaceLabel = 'Blocked';
-    expectedPreviousDynamicTools = ['get_recovery_options', 'deliver_by_alternate_route'];
-    expectedCurrentDynamicTools = ['revoke_alternate_delivery'];
+    expectedPreviousDynamicTools = [
+      'inspect_customer_delivery_policy',
+      'list_authorized_contacts',
+      'create_scoped_access_grant',
+      'upload_invoice_to_procurement_portal',
+    ];
+    expectedCurrentDynamicTools = [
+      'inspect_customer_delivery_policy',
+      'list_authorized_contacts',
+      ...(hasUsableGrant ? ['revoke_access_grant' as const] : []),
+    ];
   } else if (isResumable) {
     previousSurfaceLabel = hasUsableGrant ? 'Mitigated' : 'Blocked';
-    expectedPreviousDynamicTools = hasUsableGrant ? ['revoke_alternate_delivery'] : [];
+    expectedPreviousDynamicTools = hasUsableGrant ? ['revoke_access_grant'] : [];
     expectedCurrentDynamicTools = hasUsableGrant
-      ? ['revoke_alternate_delivery', 'resume_intent']
+      ? ['revoke_access_grant', 'resume_intent']
       : ['resume_intent'];
   } else if (isCompleted) {
     previousSurfaceLabel = 'Resumable';
     expectedPreviousDynamicTools = hasUsableGrant
-      ? ['revoke_alternate_delivery', 'resume_intent']
+      ? ['revoke_access_grant', 'resume_intent']
       : ['resume_intent'];
-    expectedCurrentDynamicTools = hasUsableGrant ? ['revoke_alternate_delivery'] : [];
+    expectedCurrentDynamicTools = hasUsableGrant ? ['revoke_access_grant'] : [];
   }
 
   const currentDynamicToolNames = registeredTools.length > 0
@@ -264,6 +285,12 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   </span>
                   secure_share_link · {hasUsableGrant ? 'active' : 'available, not used'}
                 </div>
+                <div className={`flex items-center gap-1.5 ${portalReceipt ? 'text-emerald-300' : 'text-slate-400'}`}>
+                  <span className={portalReceipt ? 'text-emerald-400' : 'text-slate-500'}>
+                    {portalReceipt ? '✓' : '○'}
+                  </span>
+                  procurement_portal · {portalReceipt ? 'uploaded and verified' : portalAvailable ? 'available' : 'availability unknown until attempted'}
+                </div>
               </div>
               <div className="pt-1 text-[10px] text-slate-400 font-sans">
                 A broken route is not a lost goal. The outcome is reachable while the defect stays open.
@@ -290,7 +317,13 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               <div>• Amount: <strong className="text-white">${currentIntent.entities.amount}</strong></div>
               <div>• Delivery: <strong className={isCompleted ? 'text-emerald-400' : 'text-rose-400'}>{isCompleted ? 'Sent ✓' : 'Incomplete'}</strong></div>
               <div>• Outcome: <strong className={isCompleted || hasUsableGrant ? 'text-emerald-400' : 'text-rose-400'}>
-                {isCompleted ? 'Reached by email ✓' : hasUsableGrant ? 'Reached by share link ✓' : 'Not reached'}
+                {isCompleted
+                  ? 'Reached by email ✓'
+                  : hasUsableGrant
+                  ? 'Reached by share link ✓'
+                  : portalReceipt
+                  ? 'Reached through procurement portal ✓'
+                  : 'Not reached'}
               </strong></div>
             </div>
 
@@ -371,6 +404,17 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </div>
             )}
 
+            {portalReceipt && (
+              <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-950/20 space-y-1.5 text-[11px]">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 block font-mono">
+                  Procurement portal receipt
+                </span>
+                <div className="text-slate-300">• Receipt: <strong className="text-white">{portalReceipt.id}</strong></div>
+                <div className="text-slate-300">• Account: <strong className="text-white">{portalReceipt.portalAccount}</strong></div>
+                <div className="text-slate-300">• Verified: <strong className="text-emerald-300">{new Date(portalReceipt.verifiedAt).toLocaleTimeString()}</strong></div>
+              </div>
+            )}
+
             {/* Status */}
             <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1 text-[11px]">
               <span className="text-[10px] uppercase font-bold text-slate-400 block font-mono">Status</span>
@@ -409,10 +453,10 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                     {isResumable
                       ? '"Can you finish it now?"'
                       : isMitigated
-                      ? '"Is the invoice actually fixed yet?"'
+                      ? '"Verify the outcome and keep monitoring the primary route."'
                       : hasUsableGrant
                       ? '"What happened to what I was doing?"'
-                      : '"Can you get it to them another way?"'}
+                      : '"Get Acme the invoice before their review. Don\'t give anyone permanent access, and don\'t make me babysit it."'}
                   </div>
 
                   {(isBlocked || isMitigated) && (
@@ -460,8 +504,66 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                 <ShieldCheck className="w-4 h-4" /> Authoritative Policy Gate Active
               </span>
               <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                The model chooses among authorized actions; it never determines authorization. State invariants are verified server-side before execution.
+                The agent proposes a workflow from policy evidence and primitive capabilities. The server independently verifies every action, parameter, and state transition.
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase font-mono tracking-wider font-semibold text-slate-400">
+                Judge-controlled policy scenario
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => void intentRuntime.setRecoveryScenario('portal_outage')}
+                  disabled={hasUsableGrant || Boolean(portalReceipt)}
+                  className={`p-2.5 rounded-lg border text-left transition-colors disabled:opacity-40 ${
+                    recoveryScenario === 'portal_outage'
+                      ? 'border-emerald-500/50 bg-emerald-950/30 text-emerald-200'
+                      : 'border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500'
+                  }`}
+                >
+                  <strong className="block text-[11px]">Portal outage</strong>
+                  <span className="text-[9px] text-slate-400">Temporary link fallback permitted</span>
+                </button>
+                <button
+                  onClick={() => void intentRuntime.setRecoveryScenario('portal_only')}
+                  disabled={hasUsableGrant || Boolean(portalReceipt)}
+                  className={`p-2.5 rounded-lg border text-left transition-colors disabled:opacity-40 ${
+                    recoveryScenario === 'portal_only'
+                      ? 'border-emerald-500/50 bg-emerald-950/30 text-emerald-200'
+                      : 'border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500'
+                  }`}
+                >
+                  <strong className="block text-[11px]">Portal only</strong>
+                  <span className="text-[9px] text-slate-400">External links prohibited</span>
+                </button>
+              </div>
+            </div>
+
+            {customerPolicy && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">Customer policy evidence</span>
+                  <span className="text-[9px] text-slate-500">{customerPolicy.version}</span>
+                </div>
+                <blockquote className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px] leading-relaxed text-slate-200 font-sans">
+                  {customerPolicy.sourceText}
+                </blockquote>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">Candidate contacts</span>
+              {authorizedContacts.map((contact) => (
+                <div key={contact.id} className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[10px] text-slate-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-white text-[11px]">{contact.name}</strong>
+                    <span className="text-slate-500">{contact.role.replaceAll('_', ' ')}</span>
+                  </div>
+                  <div className="text-slate-400">{contact.email}</div>
+                  <p className="mt-1 text-slate-500 font-sans">{contact.notes}</p>
+                </div>
+              ))}
             </div>
 
             <div className="space-y-2">
@@ -552,24 +654,21 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               <span className="text-emerald-400 font-bold block">WebMCP Dynamic Tool Surface:</span>
               <p className="text-slate-300 text-[10px] font-sans">
                 The tool list is a function of server-authoritative state, not a fixed manifest. The
-                agent normally cannot discover an action invalid for the current state; the server
-                still enforces every call.
+                tool surface is state-gated: actions invalid for the current lifecycle state do not
+                exist in the schema. The server still enforces every call and parameter.
               </p>
               <div className="pt-1 space-y-0.5 text-[10px] font-mono text-slate-400">
                 <div>
-                  get_recovery_options —{' '}
-                  <span className={isBlocked ? 'text-emerald-400' : 'text-slate-500'}>
-                    {isBlocked ? 'registered' : 'absent'}
-                  </span>
+                  inspect policy + contacts — <span className={isBlocked || isMitigated ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked || isMitigated ? 'registered' : 'absent'}</span>
                 </div>
                 <div>
-                  deliver_by_alternate_route —{' '}
-                  <span className={isBlocked || isMitigated ? 'text-emerald-400' : 'text-slate-500'}>
-                    {hasUsableGrant ? 'withdrawn (link already live)' : isBlocked ? 'registered' : 'absent'}
-                  </span>
+                  create_scoped_access_grant — <span className={isBlocked && !hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked && !hasUsableGrant ? 'registered' : 'absent'}</span>
                 </div>
                 <div>
-                  revoke_alternate_delivery —{' '}
+                  upload_invoice_to_procurement_portal — <span className={isBlocked ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked ? 'registered' : 'absent'}</span>
+                </div>
+                <div>
+                  revoke_access_grant —{' '}
                   <span className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>
                     {hasUsableGrant ? 'registered' : 'absent'}
                   </span>
@@ -635,9 +734,7 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               </span>
               <div className="space-y-1.5">
                 {registeredTools.map((t) => {
-                  const isDynamic = ['get_recovery_options', 'resume_intent', 'deliver_by_alternate_route', 'revoke_alternate_delivery'].includes(
-                    t.name,
-                  );
+                  const isDynamic = DYNAMIC_SURFACE_TOOL_NAMES.includes(t.name as DynamicSurfaceToolName);
                   return (
                     <div
                       key={t.name}
