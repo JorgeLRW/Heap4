@@ -20,6 +20,7 @@ type DynamicToolName =
   | 'inspect_customer_delivery_policy'
   | 'list_authorized_contacts'
   | 'create_scoped_access_grant'
+  | 'send_access_notice'
   | 'upload_invoice_to_procurement_portal'
   | 'revoke_access_grant'
   | 'resume_intent';
@@ -341,7 +342,7 @@ export function initializeWebMCPTools(): Promise<void> {
         }
         const goalSatisfied = Boolean(
           intent.progress.deliveryCompleted ||
-            intentRuntime.hasUsableAccessGrant() ||
+            (intentRuntime.hasUsableAccessGrant() && intentRuntime.getAccessNoticeReceipt()) ||
             intentRuntime.getProcurementPortalReceipt()
         );
         intentRuntime.requestAgentUiFocus({
@@ -359,6 +360,7 @@ export function initializeWebMCPTools(): Promise<void> {
           primaryRouteDelivered: intent.progress.deliveryCompleted,
           primaryRouteRepaired: intentRuntime.getCurrentBuild() === 'demo-build-b',
           outstandingAccessGrant: describeAccessGrant(),
+          accessNoticeReceipt: intentRuntime.getAccessNoticeReceipt(),
           procurementPortalReceipt: intentRuntime.getProcurementPortalReceipt(),
           invoiceCreateCount: intentRuntime.getInvoiceCreateCount(),
           invariantsPreserved: intentRuntime.getInvoiceCreateCount() === 1,
@@ -391,6 +393,7 @@ export function initializeWebMCPTools(): Promise<void> {
  */
 export async function onIntentStatusChange(intent: Intent | null): Promise<void> {
   const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
+  const hasAccessNotice = Boolean(intentRuntime.getAccessNoticeReceipt());
   const needsRecoveryPlan = intent?.status === 'blocked';
   const recoveryFactsRelevant = intent?.status === 'blocked' || intent?.status === 'mitigated';
 
@@ -405,6 +408,11 @@ export async function onIntentStatusChange(intent: Intent | null): Promise<void>
       'create_scoped_access_grant',
       Boolean(needsRecoveryPlan && !hasUsableGrant),
       buildCreateScopedAccessGrantTool,
+    ),
+    syncDynamicTool(
+      'send_access_notice',
+      Boolean(needsRecoveryPlan && hasUsableGrant && !hasAccessNotice),
+      buildSendAccessNoticeTool,
     ),
     syncDynamicTool(
       'upload_invoice_to_procurement_portal',
@@ -540,8 +548,7 @@ function scheduleSurfaceSync(intent: Intent | null): void {
 
 /**
  * Present only while the primary route is broken and no share link is live.
- * This reaches the user's outcome without waiting for, or standing in for, the
- * engineering repair.
+ * This creates authority but does not deliver it or complete the outcome.
  */
 function buildCreateScopedAccessGrantTool(): ModelContextTool {
   return {
@@ -645,8 +652,8 @@ function buildCreateScopedAccessGrantTool(): ModelContextTool {
 
       return logAndReturn({
         intentId: id,
-        outcomeReached: true,
-        via: 'secure_share_link',
+        outcomeReached: false,
+        grantCreated: true,
         accessUrl,
         expiresAt: grant.expiresAt,
         scope: grant.scope,
@@ -654,8 +661,76 @@ function buildCreateScopedAccessGrantTool(): ModelContextTool {
         primaryRouteStillBroken: true,
         repairStatus: intentRuntime.getRepairJob()?.status ?? 'not_started',
         handOff:
-          'Give this link to the user. It is shown once, reads one invoice, expires, and can be revoked with revoke_access_grant.',
+          'The grant exists but has not been delivered. Use an available delivery primitive that complies with customer policy.',
       });
+    },
+  };
+}
+
+function buildSendAccessNoticeTool(): ModelContextTool {
+  return {
+    name: 'send_access_notice',
+    title: 'Send Access Notice',
+    description:
+      'Send a notice about an existing scoped access grant to a chosen contact. Supply the notice text and whether to attach the invoice; the server verifies grant audience, customer policy, and attachment rules before delivery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intentId: { type: 'string', description: 'Blocked intent with an existing scoped grant.' },
+        contactId: { type: 'string', description: 'Recipient selected from customer contacts.' },
+        message: { type: 'string', description: 'Notice text, 10 to 300 characters.' },
+        includeAttachment: {
+          type: 'boolean',
+          description: 'Whether the finalized invoice should be attached to this notice.',
+        },
+      },
+      required: ['intentId', 'contactId', 'message', 'includeAttachment'],
+    },
+    annotations: { readOnlyHint: false },
+    execute: async ({ intentId, contactId, message, includeAttachment }) => {
+      const startedAt = performance.now();
+      const id = String(intentId);
+      const recipientId = String(contactId);
+      const notice = String(message ?? '');
+      const attach = includeAttachment === true;
+      const logAndReturn = (payload: Record<string, unknown>) => {
+        intentRuntime.logToolCall(
+          'send_access_notice',
+          { intentId: id, contactId: recipientId, message: notice, includeAttachment: attach },
+          payload,
+          Math.max(1, Math.round(performance.now() - startedAt)),
+          false,
+        );
+        return payload;
+      };
+
+      if (!(await refreshAndGetIntent(id))) return logAndReturn(intentNotFound(id));
+      try {
+        const { receipt, intent: updated } = await intentRuntime.sendAccessNotice(
+          id,
+          recipientId,
+          notice,
+          attach,
+        );
+        scheduleSurfaceSync(updated);
+        return logAndReturn({
+          ok: true,
+          intentId: id,
+          outcomeReached: true,
+          via: 'secure_share_link',
+          receipt,
+          accessGrant: describeAccessGrant(),
+          primaryRouteStillBroken: true,
+        });
+      } catch (error) {
+        return logAndReturn(
+          toolError('policy_verification_failed', error instanceof Error ? error.message : String(error), {
+            intentId: id,
+            recoveryHint:
+              'Re-read the policy and grant audience, then revise the notice recipient, text, or attachment choice.',
+          }),
+        );
+      }
     },
   };
 }

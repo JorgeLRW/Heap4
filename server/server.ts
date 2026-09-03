@@ -183,6 +183,22 @@ app.post('/api/demo/intents/:intentId/procurement-portal', (req, res) => {
   }
 });
 
+app.post('/api/demo/intents/:intentId/access-notices', (req, res) => {
+  try {
+    res.json(
+      demoStore.sendAccessNotice(
+        getDemoSessionId(req),
+        req.params.intentId,
+        String(req.body?.contactId || ''),
+        String(req.body?.message || '').slice(0, 300),
+        req.body?.includeAttachment === true,
+      ),
+    );
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 app.post('/api/demo/intents/:intentId/access-grants/revoke', (req, res) => {
   try {
     const reason = String(req.body?.reason || '').slice(0, 200) || 'No reason supplied.';

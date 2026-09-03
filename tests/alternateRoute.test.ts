@@ -136,6 +136,19 @@ async function runAlternateRouteTests() {
     'The server rejects a grant longer than the natural-language policy permits',
   );
 
+  let noticeWithoutGrantRejected = false;
+  try {
+    await api.sendAccessNotice(
+      'int_2841',
+      'contact_dana_lee',
+      'Your temporary invoice access is ready.',
+      false,
+    );
+  } catch {
+    noticeWithoutGrantRejected = true;
+  }
+  assert(noticeWithoutGrantRejected, 'The server rejects an access notice before a grant exists');
+
   // The agent replans after the portal failure and composes a legal primitive call.
   const routeResult = await modelContext.executeTool(
     'create_scoped_access_grant',
@@ -149,7 +162,10 @@ async function runAlternateRouteTests() {
   );
   await flushSurfaceSync();
 
-  assert(routeResult.outcomeReached === true, 'The agent reaches the outcome through the alternate route');
+  assert(
+    routeResult.outcomeReached === false && routeResult.grantCreated === true,
+    'Creating authority alone does not claim that the recipient received it',
+  );
   assert(
     routeResult.primaryRouteStillBroken === true,
     'The alternate route reports that it did not repair the defect',
@@ -159,34 +175,86 @@ async function runAlternateRouteTests() {
     'A capability URL is returned once, at issue time',
   );
 
-  const mitigated = await api.getState();
-  assert(mitigated.intent?.status === 'mitigated', 'The intent becomes mitigated rather than completed');
+  const grantCreated = await api.getState();
+  assert(grantCreated.intent?.status === 'blocked', 'The intent remains blocked until the grant is delivered');
+  assert(grantCreated.accessNoticeReceipt === null, 'No delivery receipt exists after grant creation alone');
   assert(
-    mitigated.invoice?.deliveryStatus === 'pending',
+    grantCreated.invoice?.deliveryStatus === 'pending',
     'The invoice is never marked sent by a workaround',
   );
-  assert(mitigated.invoice?.amount === 4850, 'NEVER_MODIFY_AMOUNT holds across the alternate route');
-  assert(mitigated.invoiceCreateCount === 1, 'NEVER_DUPLICATE_INVOICE holds across the alternate route');
+  assert(grantCreated.invoice?.amount === 4850, 'NEVER_MODIFY_AMOUNT holds across the alternate route');
+  assert(grantCreated.invoiceCreateCount === 1, 'NEVER_DUPLICATE_INVOICE holds across the alternate route');
   assert(
-    mitigated.accessGrant !== null && !('token' in (mitigated.accessGrant as object)),
+    grantCreated.accessGrant !== null && !('token' in (grantCreated.accessGrant as object)),
     'Only the token digest is persisted server-side',
   );
   assert(
-    mitigated.recoveryApproval?.route === 'secure_share_link' &&
-      mitigated.recoveryApproval.channel === 'webmcp_agent_conversation',
+    grantCreated.recoveryApproval?.route === 'secure_share_link' &&
+      grantCreated.recoveryApproval.channel === 'webmcp_agent_conversation',
     'The server records the confirmed route without persisting the user’s words',
   );
   assert(
-    mitigated.repairJob !== null && mitigated.repairJob.status !== 'approved_and_deployed',
+    grantCreated.repairJob !== null && grantCreated.repairJob.status !== 'approved_and_deployed',
     'The engineering repair remains open while the workaround is live',
   );
 
   names = await toolNames(modelContext);
   assert(
     !names.includes('create_scoped_access_grant') &&
-      !names.includes('upload_invoice_to_procurement_portal') &&
+      names.includes('send_access_notice') &&
       names.includes('revoke_access_grant'),
-    'Issuing a link withdraws the issue capability and exposes the revoke capability',
+    'A minted grant withdraws issuance and exposes delivery plus revocation primitives',
+  );
+
+  const wrongNoticeContact = await modelContext.executeTool(
+    'send_access_notice',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_billing_archive',
+      message: 'Your temporary invoice access is ready.',
+      includeAttachment: false,
+    }),
+  );
+  assert(
+    wrongNoticeContact.error === 'policy_verification_failed',
+    'The server rejects delivery to a recipient outside the grant audience',
+  );
+
+  const attachedNotice = await modelContext.executeTool(
+    'send_access_notice',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      message: 'Your temporary invoice access is ready.',
+      includeAttachment: true,
+    }),
+  );
+  assert(
+    attachedNotice.error === 'policy_verification_failed',
+    'The server rejects an invoice attachment prohibited by customer policy',
+  );
+
+  const noticeResult = await modelContext.executeTool(
+    'send_access_notice',
+    JSON.stringify({
+      intentId: 'int_2841',
+      contactId: 'contact_dana_lee',
+      message: 'A one-hour read-only link is available for invoice INV-2841.',
+      includeAttachment: false,
+    }),
+  );
+  await flushSurfaceSync();
+  assert(
+    noticeResult.ok === true && noticeResult.outcomeReached === true,
+    'A compliant no-attachment notice delivers the grant and reaches the outcome',
+  );
+
+  const mitigated = await api.getState();
+  assert(mitigated.intent?.status === 'mitigated', 'Delivery mitigates rather than completes the intent');
+  assert(
+    mitigated.accessNoticeReceipt?.attachmentIncluded === false &&
+      mitigated.accessNoticeReceipt.contactId === 'contact_dana_lee',
+    'The server records the verified recipient and no-attachment delivery receipt',
   );
 
   // The link is a real, scoped read path, not a decorative string.

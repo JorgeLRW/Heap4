@@ -40,6 +40,7 @@ const DYNAMIC_SURFACE_TOOL_NAMES = [
   'inspect_customer_delivery_policy',
   'list_authorized_contacts',
   'create_scoped_access_grant',
+  'send_access_notice',
   'upload_invoice_to_procurement_portal',
   'revoke_access_grant',
   'resume_intent',
@@ -59,10 +60,12 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const [registeredTools, setRegisteredTools] = useState<any[]>([]);
   const [toolLogs, setToolLogs] = useState<ToolActivityRecord[]>([]);
   const [sourcePulse, setSourcePulse] = useState(false);
-  const [compatibilityAction, setCompatibilityAction] = useState<'portal' | 'grant' | 'resume' | 'revoke' | null>(null);
+  const [compatibilityAction, setCompatibilityAction] = useState<'portal' | 'grant' | 'notice' | 'resume' | 'revoke' | null>(null);
   const [compatibilityResult, setCompatibilityResult] = useState<string | null>(null);
   const [compatibilityContactId, setCompatibilityContactId] = useState('');
   const [compatibilityExpirationMinutes, setCompatibilityExpirationMinutes] = useState(60);
+  const [compatibilityNoticeMessage, setCompatibilityNoticeMessage] = useState('');
+  const [compatibilityAttachmentChoice, setCompatibilityAttachmentChoice] = useState<'' | 'yes' | 'no'>('');
 
   useEffect(() => {
     if (!agentFocus) return;
@@ -114,6 +117,7 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const portalAvailable = intentRuntime.getProcurementPortalAvailability();
   const portalReceipt = intentRuntime.getProcurementPortalReceipt();
   const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
+  const accessNoticeReceipt = intentRuntime.getAccessNoticeReceipt();
   const issuedAccessUrl = intentRuntime.getLastIssuedAccessUrl();
   const primaryRouteHealthy = intentRuntime.getCurrentBuild() === 'demo-build-b';
   const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
@@ -127,7 +131,9 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
     expectedCurrentDynamicTools = [
       'inspect_customer_delivery_policy',
       'list_authorized_contacts',
-      'create_scoped_access_grant',
+      ...(hasUsableGrant
+        ? ['send_access_notice' as const, 'revoke_access_grant' as const]
+        : ['create_scoped_access_grant' as const]),
       'upload_invoice_to_procurement_portal',
     ];
   } else if (isMitigated) {
@@ -201,7 +207,20 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
         `Approved through the browser compatibility control for ${compatibilityContact.name}.`,
         'user',
       );
-      return `Issued ${compatibilityExpirationMinutes}-minute read-only access for ${compatibilityContact.name}.`;
+      return `Created ${compatibilityExpirationMinutes}-minute read-only access for ${compatibilityContact.name}; delivery is still pending.`;
+    });
+
+  const sendNoticeFromBrowser = () =>
+    runCompatibilityAction('notice', async () => {
+      if (!compatibilityContact) throw new Error('Select a contact before sending the notice.');
+      if (!compatibilityAttachmentChoice) throw new Error('Choose whether to attach the invoice.');
+      await intentRuntime.sendAccessNotice(
+        currentIntent.id,
+        compatibilityContact.id,
+        compatibilityNoticeMessage,
+        compatibilityAttachmentChoice === 'yes',
+      );
+      return `Access notice delivered to ${compatibilityContact.name}.`;
     });
 
   const resumeFromBrowser = () =>
@@ -338,11 +357,11 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   </span>
                   email_delivery · {primaryRouteHealthy ? 'repaired' : 'broken at DeliveryService.ts:42'}
                 </div>
-                <div className={`flex items-center gap-1.5 ${hasUsableGrant ? 'text-emerald-300' : 'text-slate-400'}`}>
-                  <span className={hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>
-                    {hasUsableGrant ? '✓' : '○'}
+                <div className={`flex items-center gap-1.5 ${accessNoticeReceipt ? 'text-emerald-300' : hasUsableGrant ? 'text-amber-300' : 'text-slate-400'}`}>
+                  <span className={accessNoticeReceipt ? 'text-emerald-400' : hasUsableGrant ? 'text-amber-400' : 'text-slate-500'}>
+                    {accessNoticeReceipt ? '✓' : hasUsableGrant ? '◐' : '○'}
                   </span>
-                  secure_share_link · {hasUsableGrant ? 'active' : 'available, not used'}
+                  secure_share_link · {accessNoticeReceipt ? 'delivered by notice' : hasUsableGrant ? 'grant created, delivery pending' : 'available, not used'}
                 </div>
                 <div className={`flex items-center gap-1.5 ${portalReceipt ? 'text-emerald-300' : 'text-slate-400'}`}>
                   <span className={portalReceipt ? 'text-emerald-400' : 'text-slate-500'}>
@@ -375,10 +394,10 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
               <div>• Invoice ID: <strong className="text-white">{currentIntent.entities.invoiceId}</strong></div>
               <div>• Amount: <strong className="text-white">${currentIntent.entities.amount}</strong></div>
               <div>• Delivery: <strong className={isCompleted ? 'text-emerald-400' : 'text-rose-400'}>{isCompleted ? 'Sent ✓' : 'Incomplete'}</strong></div>
-              <div>• Outcome: <strong className={isCompleted || hasUsableGrant ? 'text-emerald-400' : 'text-rose-400'}>
+              <div>• Outcome: <strong className={isCompleted || (hasUsableGrant && accessNoticeReceipt) || portalReceipt ? 'text-emerald-400' : 'text-rose-400'}>
                 {isCompleted
                   ? 'Reached by email ✓'
-                  : hasUsableGrant
+                  : hasUsableGrant && accessNoticeReceipt
                   ? 'Reached by share link ✓'
                   : portalReceipt
                   ? 'Reached through procurement portal ✓'
@@ -463,8 +482,20 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   </a>
                 )}
                 <p className="pt-0.5 text-[10px] text-slate-400 font-sans">
-                  Only the digest of this link is stored. It reads one invoice, expires, and is revocable.
+                  Only the digest is stored. Creating the grant does not deliver it; a verified notice is required.
                 </p>
+              </div>
+            )}
+
+            {accessNoticeReceipt && (
+              <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-950/20 space-y-1.5 text-[11px]">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 block font-mono">
+                  Access notice receipt
+                </span>
+                <div className="text-slate-300">• Receipt: <strong className="text-white">{accessNoticeReceipt.id}</strong></div>
+                <div className="text-slate-300">• Contact: <strong className="text-white">{accessNoticeReceipt.contactId}</strong></div>
+                <div className="text-slate-300">• Attachment: <strong className="text-emerald-300">none</strong></div>
+                <div className="text-slate-300">• Sent: <strong className="text-emerald-300">{new Date(accessNoticeReceipt.sentAt).toLocaleTimeString()}</strong></div>
               </div>
             )}
 
@@ -501,6 +532,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   ? 'Mitigated · outcome reached by share link, email route still defective'
                   : repairJob
                   ? `Blocked · repair pipeline ${repairJob.status.replaceAll('_', ' ')}`
+                  : hasUsableGrant
+                  ? 'Blocked · access grant created, recipient notice still required'
                   : 'Blocked by application defect'}
               </div>
             </div>
@@ -566,6 +599,50 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                       </div>
                     )}
 
+                    {hasUsableGrant && !accessNoticeReceipt && (
+                      <div className="space-y-2 border-t border-slate-800 pt-2">
+                        <label className="block space-y-1 text-[10px] text-slate-400 font-sans">
+                          <span>Notice written by agent</span>
+                          <textarea
+                            aria-label="Access notice written by agent"
+                            rows={3}
+                            maxLength={300}
+                            value={compatibilityNoticeMessage}
+                            onChange={(event) => setCompatibilityNoticeMessage(event.target.value)}
+                            disabled={compatibilityAction !== null}
+                            className="w-full resize-none rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-100 outline-none focus:border-emerald-500"
+                          />
+                        </label>
+                        <label className="block space-y-1 text-[10px] text-slate-400 font-sans">
+                          <span>Invoice attachment</span>
+                          <select
+                            aria-label="Whether to attach the invoice"
+                            value={compatibilityAttachmentChoice}
+                            onChange={(event) => setCompatibilityAttachmentChoice(event.target.value as '' | 'yes' | 'no')}
+                            disabled={compatibilityAction !== null}
+                            className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-100 outline-none focus:border-emerald-500"
+                          >
+                            <option value="">Choose attachment handling</option>
+                            <option value="yes">Attach finalized invoice</option>
+                            <option value="no">Send notice without attachment</option>
+                          </select>
+                        </label>
+                        <button
+                          onClick={() => void sendNoticeFromBrowser()}
+                          disabled={
+                            compatibilityAction !== null ||
+                            !compatibilityContactId ||
+                            !compatibilityNoticeMessage.trim() ||
+                            !compatibilityAttachmentChoice
+                          }
+                          className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-950/30 px-3 py-2 text-[11px] font-semibold text-emerald-100 transition-colors hover:bg-emerald-900/40 disabled:opacity-50"
+                        >
+                          <ArrowRight className="h-3.5 w-3.5" />
+                          {compatibilityAction === 'notice' ? 'Verifying notice…' : 'Send access notice'}
+                        </button>
+                      </div>
+                    )}
+
                     {!hasUsableGrant && (
                       <button
                         onClick={() => void issueGrantFromBrowser()}
@@ -621,7 +698,7 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                       : isMitigated
                       ? '"Verify the outcome and keep monitoring the primary route."'
                       : hasUsableGrant
-                      ? '"What happened to what I was doing?"'
+                      ? '"Finish getting Acme access without violating their delivery policy."'
                       : '"Get Acme the invoice before their review. Don\'t give anyone permanent access, and don\'t make me babysit it."'}
                   </div>
 
@@ -829,6 +906,9 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                 </div>
                 <div>
                   create_scoped_access_grant — <span className={isBlocked && !hasUsableGrant ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked && !hasUsableGrant ? 'registered' : 'absent'}</span>
+                </div>
+                <div>
+                  send_access_notice — <span className={isBlocked && hasUsableGrant && !accessNoticeReceipt ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked && hasUsableGrant && !accessNoticeReceipt ? 'registered' : 'absent'}</span>
                 </div>
                 <div>
                   upload_invoice_to_procurement_portal — <span className={isBlocked ? 'text-emerald-400' : 'text-slate-500'}>{isBlocked ? 'registered' : 'absent'}</span>

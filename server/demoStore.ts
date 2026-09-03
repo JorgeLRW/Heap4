@@ -16,6 +16,7 @@ import {
   requestRepairTransition,
   resumeIntentTransition,
   revokeAlternateAccessTransition,
+  sendAccessNoticeTransition,
   setRecoveryScenarioTransition,
   sendInvoiceTransition,
   toAccessView,
@@ -98,6 +99,22 @@ export class DemoStore {
       this.mutableState(sessionId),
       intentId,
       contactId,
+    );
+  }
+
+  sendAccessNotice(
+    sessionId: string,
+    intentId: string,
+    contactId: string,
+    message: string,
+    includeAttachment: boolean,
+  ) {
+    return sendAccessNoticeTransition(
+      this.mutableState(sessionId),
+      intentId,
+      contactId,
+      message,
+      includeAttachment,
     );
   }
 
@@ -232,6 +249,21 @@ export class InMemoryDemoApi implements DemoApi {
 
   async uploadInvoiceToProcurementPortal(intentId: string, contactId: string) {
     return this.store.uploadInvoiceToProcurementPortal(this.sessionId, intentId, contactId);
+  }
+
+  async sendAccessNotice(
+    intentId: string,
+    contactId: string,
+    message: string,
+    includeAttachment: boolean,
+  ) {
+    return this.store.sendAccessNotice(
+      this.sessionId,
+      intentId,
+      contactId,
+      message,
+      includeAttachment,
+    );
   }
 
   async revokeAlternateAccess(intentId: string, reason: string) {

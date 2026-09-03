@@ -7,6 +7,7 @@
 
 import type {
   AuthorizedContact,
+  AccessNoticeReceipt,
   CustomerDeliveryPolicy,
   DemoApi,
   DemoBuild,
@@ -40,6 +41,7 @@ export class IntentRuntime {
   private currentBuild: DemoBuild = 'demo-build-a';
   private repairJob: RepairJob | null = null;
   private accessGrant: InvoiceAccessGrant | null = null;
+  private accessNoticeReceipt: AccessNoticeReceipt | null = null;
   private recoveryApproval: DemoSessionState['recoveryApproval'] = null;
   private recoveryScenario: RecoveryScenarioId = 'portal_outage';
   private customerPolicy: CustomerDeliveryPolicy | null = null;
@@ -99,6 +101,10 @@ export class IntentRuntime {
 
   public getAccessGrant(): InvoiceAccessGrant | null {
     return this.accessGrant;
+  }
+
+  public getAccessNoticeReceipt(): AccessNoticeReceipt | null {
+    return this.accessNoticeReceipt;
   }
 
   public getRecoveryApproval(): DemoSessionState['recoveryApproval'] {
@@ -225,6 +231,24 @@ export class IntentRuntime {
     return { receipt: result.receipt, intent };
   }
 
+  public async sendAccessNotice(
+    intentId: string,
+    contactId: string,
+    message: string,
+    includeAttachment: boolean,
+  ): Promise<{ receipt: AccessNoticeReceipt; intent: Intent }> {
+    const result = await this.api.sendAccessNotice(
+      intentId,
+      contactId,
+      message,
+      includeAttachment,
+    );
+    this.applyServerState(result.state);
+    const intent = this.intents.get(intentId);
+    if (!intent) throw new Error(`Server did not return intent ${intentId}`);
+    return { receipt: result.receipt, intent };
+  }
+
   public async revokeAlternateAccess(intentId: string, reason: string): Promise<Intent> {
     const result = await this.api.revokeAlternateAccess(intentId, reason);
     this.lastIssuedAccessUrl = null;
@@ -296,6 +320,7 @@ export class IntentRuntime {
     this.currentBuild = state.build;
     this.repairJob = state.repairJob;
     this.accessGrant = state.accessGrant;
+    this.accessNoticeReceipt = state.accessNoticeReceipt;
     this.recoveryApproval = state.recoveryApproval;
     this.recoveryScenario = state.recoveryScenario;
     this.customerPolicy = state.customerPolicy;

@@ -9,6 +9,7 @@ import {
   requestRepairTransition,
   resumeIntentTransition,
   revokeAlternateAccessTransition,
+  sendAccessNoticeTransition,
   setRecoveryScenarioTransition,
   sendInvoiceTransition,
   toAccessView,
@@ -261,6 +262,25 @@ export default {
           state,
           decodeURIComponent(portalMatch[1]),
           String(body.contactId || ''),
+        );
+        await sessions.save(state);
+        return json(result);
+      }
+
+      const noticeMatch = url.pathname.match(/^\/api\/demo\/intents\/([^/]+)\/access-notices$/);
+      if (request.method === 'POST' && noticeMatch) {
+        const state = await sessions.get(sessionId);
+        const body = (await request.json()) as {
+          contactId?: string;
+          message?: string;
+          includeAttachment?: boolean;
+        };
+        const result = sendAccessNoticeTransition(
+          state,
+          decodeURIComponent(noticeMatch[1]),
+          String(body.contactId || ''),
+          String(body.message || '').slice(0, 300),
+          body.includeAttachment === true,
         );
         await sessions.save(state);
         return json(result);

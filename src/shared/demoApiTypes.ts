@@ -76,6 +76,17 @@ export interface RecoveryApproval {
   channel: 'webmcp_agent_conversation' | 'user_interface';
 }
 
+export interface AccessNoticeReceipt {
+  id: string;
+  intentId: string;
+  grantId: string;
+  contactId: string;
+  channel: 'email_notice';
+  message: string;
+  attachmentIncluded: false;
+  sentAt: string;
+}
+
 export type RecoveryScenarioId = 'portal_outage' | 'portal_only';
 
 export interface AuthorizedContact {
@@ -100,6 +111,8 @@ export interface CustomerDeliveryPolicy {
     procurementPortalAllowed: boolean;
     procurementPortalContactIds: string[];
     confirmationRequiredForExternalLink: boolean;
+    externalLinkNoticeRequired: boolean;
+    noticeAttachmentsAllowed: boolean;
   };
 }
 
@@ -222,6 +235,7 @@ export interface DemoSessionState {
   invoiceCreateCount: number;
   repairJob: RepairJob | null;
   accessGrant: InvoiceAccessGrant | null;
+  accessNoticeReceipt: AccessNoticeReceipt | null;
   recoveryApproval: RecoveryApproval | null;
   recoveryScenario: RecoveryScenarioId;
   customerPolicy: CustomerDeliveryPolicy;
@@ -260,6 +274,12 @@ export interface DemoApi {
     intentId: string,
     contactId: string,
   ): Promise<{ success: boolean; state: DemoSessionState; receipt: ProcurementPortalReceipt }>;
+  sendAccessNotice(
+    intentId: string,
+    contactId: string,
+    message: string,
+    includeAttachment: boolean,
+  ): Promise<{ success: boolean; state: DemoSessionState; receipt: AccessNoticeReceipt }>;
   revokeAlternateAccess(intentId: string, reason: string): Promise<{ success: boolean; state: DemoSessionState }>;
   readInvoiceByAccessToken(token: string): Promise<{ success: boolean; invoice?: InvoiceAccessView; error?: string }>;
 }

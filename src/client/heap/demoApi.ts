@@ -118,6 +118,22 @@ export class HttpDemoApi implements DemoApi {
     });
   }
 
+  sendAccessNotice(
+    intentId: string,
+    contactId: string,
+    message: string,
+    includeAttachment: boolean,
+  ) {
+    return requestJson<{
+      success: boolean;
+      state: DemoSessionState;
+      receipt: DemoSessionState['accessNoticeReceipt'];
+    }>(`/api/demo/intents/${encodeURIComponent(intentId)}/access-notices`, {
+      method: 'POST',
+      body: JSON.stringify({ contactId, message, includeAttachment }),
+    }) as ReturnType<DemoApi['sendAccessNotice']>;
+  }
+
   revokeAlternateAccess(intentId: string, reason: string) {
     return requestJson<{ success: boolean; state: DemoSessionState }>(
       `/api/demo/intents/${encodeURIComponent(intentId)}/access-grants/revoke`,

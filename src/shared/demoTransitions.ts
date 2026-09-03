@@ -7,6 +7,7 @@ import {
   hashAccessToken,
 } from './accessGrants';
 import type {
+  AccessNoticeReceipt,
   AuthorizedContact,
   CustomerDeliveryPolicy,
   DemoSessionState,
@@ -57,7 +58,7 @@ const RECOVERY_SCENARIOS: Record<RecoveryScenarioId, RecoveryScenarioDefinition>
       customerId: 'ACME',
       version: '2026-09-03',
       sourceText:
-        'Acme AP prefers finalized invoices through the vendor portal. Email may be used for notices, but invoice attachments above $10,000 are prohibited. If the portal is unavailable, temporary external links are acceptable for designated AP approvers when access expires within one hour. Dana Lee is acting approver through September 6. billing@acme.example is retained for archival correspondence.',
+        'Acme AP prefers finalized invoices through the vendor portal. If the portal is unavailable, temporary external links are acceptable for designated AP approvers when access expires within one hour. The link must be delivered by an email notice without attaching the invoice. Dana Lee is acting approver through September 6. billing@acme.example is retained for archival correspondence.',
       enforcement: {
         externalLinksAllowed: true,
         maximumLinkMinutes: 60,
@@ -65,6 +66,8 @@ const RECOVERY_SCENARIOS: Record<RecoveryScenarioId, RecoveryScenarioDefinition>
         procurementPortalAllowed: true,
         procurementPortalContactIds: ['contact_dana_lee'],
         confirmationRequiredForExternalLink: true,
+        externalLinkNoticeRequired: true,
+        noticeAttachmentsAllowed: false,
       },
     },
     contacts: ACME_CONTACTS,
@@ -84,6 +87,8 @@ const RECOVERY_SCENARIOS: Record<RecoveryScenarioId, RecoveryScenarioDefinition>
         procurementPortalAllowed: true,
         procurementPortalContactIds: ['contact_dana_lee'],
         confirmationRequiredForExternalLink: true,
+        externalLinkNoticeRequired: false,
+        noticeAttachmentsAllowed: false,
       },
     },
     contacts: ACME_CONTACTS,
@@ -109,6 +114,7 @@ export function createInitialDemoState(sessionId: string): DemoSessionState {
     invoiceCreateCount: 0,
     repairJob: null,
     accessGrant: null,
+    accessNoticeReceipt: null,
     recoveryApproval: null,
     recoveryScenario: 'portal_outage',
     customerPolicy: scenario.policy,
@@ -453,19 +459,15 @@ export async function createScopedAccessGrantTransition(
   };
 
   state.accessGrant = grant;
+  state.accessNoticeReceipt = null;
   state.recoveryApproval = approval;
-  state.invoice.accessGrantedVia = 'secure_share_link';
-  intent.progress.goalSatisfiedVia = 'secure_share_link';
   intent.progress.completedSteps = [
     ...intent.progress.completedSteps,
-    'Issued a scoped, expiring share link for INV-2841',
+    'Created a scoped, expiring share link for INV-2841',
   ];
-  // The defect is untouched, so a mitigated intent keeps its failure context
-  // and its open repair job.
-  if (intent.status === 'blocked') intent.status = 'mitigated';
   intent.history.push({
     timestamp: issuedAt.toISOString(),
-    note: `User-confirmed secure share link route issued (${grant.id}); the email route remains broken.`,
+    note: `User-confirmed secure share link created (${grant.id}); it has not been delivered to the recipient.`,
   });
 
   return {
@@ -475,6 +477,65 @@ export async function createScopedAccessGrantTransition(
     approval: cloneDemoState(approval),
     accessUrl: buildAccessUrl(token),
   };
+}
+
+export function sendAccessNoticeTransition(
+  state: DemoSessionState,
+  intentId: string,
+  contactId: string,
+  message: string,
+  includeAttachment: boolean,
+): { success: true; state: DemoSessionState; receipt: AccessNoticeReceipt } {
+  assertIntent(state, intentId);
+  const intent = state.intent!;
+  if (intent.status !== 'blocked') {
+    throw new Error(`Intent ${intentId} is ${intent.status}; an access notice is not applicable.`);
+  }
+  const grant = state.accessGrant;
+  if (!grant || !evaluateGrantUsability(grant).usable) {
+    throw new Error('Create a usable scoped access grant before sending an access notice.');
+  }
+  if (!state.customerPolicy.enforcement.externalLinkNoticeRequired) {
+    throw new Error('The current customer policy does not require an external-link notice.');
+  }
+  if (contactId !== grant.contactId) {
+    throw new Error('The notice recipient must match the scoped access-grant audience.');
+  }
+  if (includeAttachment && !state.customerPolicy.enforcement.noticeAttachmentsAllowed) {
+    throw new Error('Customer policy prohibits invoice attachments in access notices.');
+  }
+  if (includeAttachment) {
+    throw new Error('Access notices may reference the scoped link but cannot contain the invoice.');
+  }
+  const noticeMessage = message.trim();
+  if (noticeMessage.length < 10 || noticeMessage.length > 300) {
+    throw new Error('Access notice text must be between 10 and 300 characters.');
+  }
+  if (state.accessNoticeReceipt) {
+    throw new Error(`Access notice ${state.accessNoticeReceipt.id} was already sent.`);
+  }
+
+  const sentAt = new Date().toISOString();
+  const receipt: AccessNoticeReceipt = {
+    id: `notice_${Date.now().toString(36)}`,
+    intentId,
+    grantId: grant.id,
+    contactId,
+    channel: 'email_notice',
+    message: noticeMessage,
+    attachmentIncluded: false,
+    sentAt,
+  };
+  state.accessNoticeReceipt = receipt;
+  state.invoice!.accessGrantedVia = 'secure_share_link';
+  intent.progress.goalSatisfiedVia = 'secure_share_link';
+  intent.progress.completedSteps.push('Sent a no-attachment access notice to the designated approver');
+  intent.status = 'mitigated';
+  intent.history.push({
+    timestamp: sentAt,
+    note: `Delivered scoped grant ${grant.id} through notice ${receipt.id}; the email route remains broken.`,
+  });
+  return { success: true, state: cloneDemoState(state), receipt: cloneDemoState(receipt) };
 }
 
 export function uploadInvoiceToProcurementPortalTransition(

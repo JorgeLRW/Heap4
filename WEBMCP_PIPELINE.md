@@ -61,7 +61,7 @@ that state — and, critically, a set of actions that changes with it:
 3. The agent invokes a tool through the browser-mediated
    `document.modelContext.executeTool()` path.
 4. The callback calls Heap 4's same-origin API and returns structured state.
-5. Six further tools register and deregister themselves as server state moves.
+5. Seven further tools register and deregister themselves as server state moves.
 
 Heap 4 does not install a fake production `modelContext`. If the browser has no
 native WebMCP support, the application still works as a normal site and clearly
@@ -102,10 +102,11 @@ copy of the data, and its own authorization model.
 `onIntentStatusChange` is the only place dynamic registration happens, and it is
 written as a pure projection of server-authoritative state onto a tool list:
 
-| Server state | Policy/contact evidence | Grant/portal primitives | `revoke_access_grant` | `resume_intent` |
+| Server state | Policy/contact evidence | Recovery primitives | `revoke_access_grant` | `resume_intent` |
 | --- | :---: | :---: | :---: | :---: |
 | `active` | absent | absent | absent | absent |
-| `blocked` | registered | registered | absent | absent |
+| `blocked`, no grant | registered | create grant + attempt portal | absent | absent |
+| `blocked`, live undelivered grant | registered | send notice + attempt portal | registered | absent |
 | `mitigated` | registered | absent | if grant is live | absent |
 | `resumable` | absent | absent | if grant is live | registered |
 | `completed` | absent | absent | if grant is live | absent |
@@ -115,8 +116,8 @@ The properties this buys:
 - The agent normally cannot discover an action that is invalid for the current
   state. Stale tool handles and race conditions remain possible, so every
   mutation still needs server-side enforcement.
-- Reaching the outcome withdraws both creation capabilities, so double recovery is
-  structurally impossible rather than merely validated.
+- Each successful step changes the available next actions: grant creation gives
+  way to notice delivery, and reaching the outcome withdraws recovery mutations.
 - The revoke capability outlives completion, so a workaround is always
   retractable.
 - Every mutation still re-checks its precondition server-side. The dynamic
@@ -147,14 +148,15 @@ must combine four independent surfaces:
 - `inspect_intent` supplies the desired postcondition, partial state, and invariants.
 - `inspect_customer_delivery_policy` supplies the customer's natural-language policy as evidence.
 - `list_authorized_contacts` supplies current people, roles, and notes without declaring action eligibility.
-- `create_scoped_access_grant` and `upload_invoice_to_procurement_portal` are primitive mutations with explicit parameters and effects.
+- `create_scoped_access_grant`, `send_access_notice`, and `upload_invoice_to_procurement_portal` are primitive mutations with explicit parameters and effects.
 
 The default policy prefers the procurement portal but permits a temporary link
 for a designated AP approver if the portal is unavailable. The portal tool then
 returns a live `capability_execution_failed` result. The application does not
 return a fallback plan. The agent must reinterpret the remaining evidence,
 select Dana rather than the archival mailbox, determine a compliant duration
-and scope, explain the disclosure change, and obtain confirmation.
+and scope, explain the disclosure change, obtain confirmation, then compose a
+second primitive that delivers the grant without attaching the invoice.
 
 For `create_scoped_access_grant`, the server independently enforces that:
 
@@ -164,6 +166,13 @@ For `create_scoped_access_grant`, the server independently enforces that:
 - The scope is exactly `read_invoice_only`.
 - The requested integer duration does not exceed the policy maximum.
 - Explicit confirmation exists and no usable grant is already outstanding.
+
+Creating the grant does not satisfy the outcome. It only creates authority and
+leaves the intent blocked. For `send_access_notice`, the server independently
+enforces that a usable grant exists, the recipient matches its audience, policy
+requires notice delivery, the message has valid content, and no prohibited
+invoice attachment is included. A successful notice records a receipt and moves
+the intent to `mitigated`.
 
 The portal primitive independently verifies policy, contact eligibility,
 artifact identity, and live channel availability. Under the selectable
@@ -251,9 +260,11 @@ was actually repaired, any outstanding grant, and the no-duplicate invariant.
 - Keep **Portal outage** selected and give the agent an outcome plus natural-language constraints.
 - Confirm it reads policy and contacts, attempts the preferred portal, observes the outage, and replans.
 - Confirm the server rejects the archival contact and any duration over the policy maximum.
-- Approve the agent's compliant grant for Dana; confirm the invoice is still not sent, the amount is unchanged, and the status is `mitigated`.
+- Approve the agent's compliant grant for Dana; confirm the invoice is still not sent, the amount is unchanged, and the status remains `blocked`.
+- Confirm `send_access_notice` appears, rejects the archival mailbox and an attached invoice, then accepts a compliant no-attachment notice for Dana.
+- Confirm only notice delivery changes the status to `mitigated`.
 - Open the returned link and confirm the scoped recipient view.
-- Confirm both creation primitives are withdrawn and `revoke_access_grant` has appeared.
+- Confirm grant creation is withdrawn after minting, notice delivery is withdrawn after sending, and `revoke_access_grant` remains available.
 - Reset, select **Portal only**, repeat the same failure and user request, and confirm the grant is denied while portal delivery succeeds.
 - Watch Engineering Review progress from sandbox creation through validation,
   including the command transcripts and write-scope audit.

@@ -12,7 +12,7 @@ Heap 4 never treats the model's policy interpretation as authority. A model may 
 
 An LLM is not mathematically necessary. A symbolic planner could solve the same problem if every future policy, preference, semantic relationship, precondition, and effect were formalized. Heap 4 targets the open-world case where those combinations cannot reasonably be enumerated when the application is built. WebMCP makes the current capabilities discoverable; the model handles semantic search over possible compositions; deterministic software retains authority.
 
-The demo proves the distinction by holding the failure, outcome, and user request constant while changing customer policy. Under the default policy, the agent attempts the preferred procurement portal, observes that it is unavailable, and replans to a confirmed temporary grant for Dana. Under the portal-only policy, that same grant is rejected and the portal action succeeds. There is no `get_recovery_options`, `recover_invoice`, or packaged alternate-delivery tool containing the answer.
+The demo proves the distinction by holding the failure, outcome, and user request constant while changing customer policy. Under the default policy, the agent attempts the preferred procurement portal, observes that it is unavailable, creates a confirmed temporary grant for Dana, and delivers it through a no-attachment notice. Under the portal-only policy, that grant is rejected and the portal action succeeds. There is no `get_recovery_options`, `recover_invoice`, or packaged alternate-delivery tool containing the answer.
 
 ## The thesis
 
@@ -24,7 +24,8 @@ Most error handling conflates the two. "Send invoice" fails, so the workflow is 
 outcome:  Acme Corp can read invoice INV-2841
   ├─ route: email_delivery             ← broken at DeliveryService.ts:42
   ├─ capability: procurement_portal    ← preferred, may fail at execution
-  └─ capability: scoped_access_grant   ← parameterized and policy-verified
+  └─ composition: scoped_access_grant → access_notice
+                  each step parameterized and policy-verified
 ```
 
 ## This invoice is one instance, not the whole claim
@@ -36,13 +37,13 @@ The *pattern* here isn't invoice-specific. It's four pieces, defined generically
 - `onIntentStatusChange`'s dynamic tool gating, which reads intent status and grant state, not invoice fields,
 - a capability-grant shape (scoped, expiring, revocable, access-tracked) that isn't about invoices either.
 
-Being precise about what that buys today: two invoice recovery capabilities are implemented (`secure_share_link` and `procurement_portal`), with two selectable customer-policy scenarios. Their transitions are still hardcoded against `state.invoice`; this is not yet a generic domain planner. `Intent.kind` also contains `'export_report'`, but it remains a type-level stub with no transition logic.
+Being precise about what that buys today: three invoice recovery primitives are implemented (`create_scoped_access_grant`, `send_access_notice`, and `upload_invoice_to_procurement_portal`), with two selectable customer-policy scenarios. Their transitions are still hardcoded against `state.invoice`; this is not yet a generic domain planner. `Intent.kind` also contains `'export_report'`, but it remains a type-level stub with no transition logic.
 
 The honest claim is that the planner/verifier boundary generalizes: a new domain must supply its own primitive actions, state projections, and deterministic verifiers. Heap 4 does not infer safe server mutations from prose.
 
 ## The dynamic tool surface
 
-Heap 4's registered tools are a projection of server state. While an intent is blocked, WebMCP exposes policy and contact evidence plus the `create_scoped_access_grant` and `upload_invoice_to_procurement_portal` primitives. Once one succeeds, both creation capabilities disappear. `revoke_access_grant` exists only while a usable grant is outstanding, and `resume_intent` exists only after a reviewed repair is deployed.
+Heap 4's registered tools are a projection of server state. While an intent is blocked, WebMCP exposes policy and contact evidence plus the `create_scoped_access_grant` and `upload_invoice_to_procurement_portal` primitives. Minting a grant withdraws grant creation and reveals `send_access_notice`; the intent remains blocked until notice delivery succeeds. `revoke_access_grant` exists only while a usable grant is outstanding, and `resume_intent` exists only after a reviewed repair is deployed.
 
 The tool surface is state-gated, but policy remains server-enforced. Coarse lifecycle-invalid actions do not exist in the schema; parameter-level mistakes and races are still rejected by the server.
 
@@ -61,9 +62,10 @@ One claim worth qualifying rather than asserting: because the tool executes in t
 5. The agent reads customer policy and candidate contacts, then attempts the policy-preferred procurement portal primitive.
 6. The portal reports an unexpected outage. No fallback plan was returned by the application.
 7. The agent interprets the remaining policy, selects Dana rather than the archival mailbox, proposes a 60-minute invoice-only grant, and obtains explicit confirmation.
-8. The server verifies every parameter and mints the scoped capability. The intent becomes `mitigated`, not `completed`.
-9. In parallel, a bounded repair job reaches `ready_for_review`; a human promotes it.
-10. `resume_intent` appears. The agent completes only the missing primary delivery step, verifies the outcome, and revokes the temporary grant.
+8. The server verifies every parameter and mints the scoped capability. The intent remains `blocked`: authority exists, but the recipient has not received it.
+9. `send_access_notice` appears. The agent writes the notice, chooses not to attach the invoice, and targets Dana; the server verifies those choices and records delivery. Only now does the intent become `mitigated`.
+10. In parallel, a bounded repair job reaches `ready_for_review`; a human promotes it.
+11. `resume_intent` appears. The agent completes only the missing primary delivery step, verifies the outcome, and revokes the temporary grant.
 
 The website never edits its own source, and the browser agent never receives repository or deployment authority.
 
@@ -85,13 +87,14 @@ Dynamic surface, registered only while the server would authorize it:
 - `inspect_customer_delivery_policy` — return natural-language policy evidence, not a recovery plan.
 - `list_authorized_contacts` — return candidate contacts and business roles, not action eligibility.
 - `create_scoped_access_grant` — request a contact, duration, scope, and confirmation for independent verification.
+- `send_access_notice` — deliver an existing grant using agent-selected recipient, message, and attachment handling.
 - `upload_invoice_to_procurement_portal` — attempt portal delivery and return live execution evidence, including outages.
 - `revoke_access_grant` — withdraw a temporary capability.
 - `resume_intent` — run only the unfinished step after an approved repair is deployed.
 
 Production registration is forwarded to the browser's real `document.modelContext.registerTool(...)`. The in-memory implementation in `src/webmcp/modelContext.ts` is installed by tests only and never attached to `document`, `window`, or `navigator`.
 
-Some browser-agent hosts can discover a page's WebMCP surface but cannot yet invoke page-defined tools. The Recovery tab therefore exposes clearly labeled, parameterized compatibility controls for the same portal, grant, resume, and revoke transitions. The host must still interpret policy, select a contact and duration, sequence actions, and react to server results; the page does not preselect a recovery path. These controls let a DOM-capable browser agent complete the demo through visible interaction while preserving every server-side policy and invariant check. They are explicitly presented as browser controls, not native WebMCP invocations; the WebMCP audit remains reserved for actual `document.modelContext` calls.
+Some browser-agent hosts can discover a page's WebMCP surface but cannot yet invoke page-defined tools. The Recovery tab therefore exposes clearly labeled, parameterized compatibility controls for the same portal, grant, notice, resume, and revoke transitions. The host must still interpret policy, select a contact and duration, write the notice, choose attachment handling, sequence actions, and react to server results; the page does not preselect a recovery path. These controls let a DOM-capable browser agent complete the demo through visible interaction while preserving every server-side policy and invariant check. They are explicitly presented as browser controls, not native WebMCP invocations; the WebMCP audit remains reserved for actual `document.modelContext` calls.
 
 ## The share link is a real capability
 
@@ -174,10 +177,11 @@ Because Cloudflare Workers Free does not include Containers, the public demo use
 5. In **Policy Gate**, select **Portal outage** and read the policy without changing the goal or failure.
 6. Ask: **“Get Acme the invoice before their review. Don't give anyone permanent access, and don't make me babysit it.”**
 7. Confirm the agent inspects policy and contacts, attempts `upload_invoice_to_procurement_portal`, observes the outage, and replans.
-8. Approve the proposed one-hour grant for Dana. Confirm `create_scoped_access_grant` returns a link and `revoke_access_grant` replaces both creation tools.
-9. Open the link and confirm the recipient view plus live `firstAccessedAt`.
-10. Reset and select **Portal only**. Repeat the same failure and request; confirm an external grant is rejected while portal upload succeeds.
-11. Open **Engineering Review**, approve the validated candidate, resume the missing primary step, and revoke any temporary grant.
+8. Approve the proposed one-hour grant for Dana. Confirm the intent remains blocked and `send_access_notice` appears.
+9. Confirm an attached notice is rejected, then send a compliant no-attachment notice to Dana. Confirm the intent becomes mitigated.
+10. Open the link and confirm the recipient view plus live `firstAccessedAt`.
+11. Reset and select **Portal only**. Repeat the same failure and request; confirm an external grant is rejected while portal upload succeeds.
+12. Open **Engineering Review**, approve the validated candidate, resume the missing primary step, and revoke any temporary grant.
 
 If the page reports that native WebMCP is unavailable, the normal application still works, but that browser is not a valid acceptance environment. Heap 4 intentionally does not install a JavaScript `modelContext` polyfill.
 
@@ -188,7 +192,7 @@ npm test
 npm run build
 ```
 
-The suite proves the real delivery failure, persisted interruption, policy/contact evidence, archival-contact and excessive-expiry rejection, unexpected portal failure, successful replanning to a scoped grant, policy-switched portal delivery, capability-token security, dynamic tool lifecycle, human-gated repair, invariant-safe resume, and server-authoritative outcome verification.
+The suite proves the real delivery failure, persisted interruption, policy/contact evidence, archival-contact and excessive-expiry rejection, unexpected portal failure, staged grant-plus-notice composition, wrong-recipient and attachment rejection, policy-switched portal delivery, capability-token security, dynamic tool lifecycle, human-gated repair, invariant-safe resume, and server-authoritative outcome verification.
 
 ## License
 
