@@ -59,6 +59,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const [registeredTools, setRegisteredTools] = useState<any[]>([]);
   const [toolLogs, setToolLogs] = useState<ToolActivityRecord[]>([]);
   const [sourcePulse, setSourcePulse] = useState(false);
+  const [compatibilityAction, setCompatibilityAction] = useState<'portal' | 'grant' | 'resume' | 'revoke' | null>(null);
+  const [compatibilityResult, setCompatibilityResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (!agentFocus) return;
@@ -159,6 +161,64 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const currentSurfaceLabel = registeredTools.length > 0 ? 'Now' : 'Expected now';
   const addedDynamicTools = currentDynamicToolNames.filter((toolName) => !expectedPreviousDynamicTools.includes(toolName));
   const removedDynamicTools = expectedPreviousDynamicTools.filter((toolName) => !currentDynamicToolNames.includes(toolName));
+
+  const runCompatibilityAction = async (
+    action: NonNullable<typeof compatibilityAction>,
+    execute: () => Promise<string>,
+  ) => {
+    setCompatibilityAction(action);
+    setCompatibilityResult(null);
+    try {
+      setCompatibilityResult(await execute());
+    } catch (error) {
+      setCompatibilityResult(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCompatibilityAction(null);
+    }
+  };
+
+  const eligibleContact = authorizedContacts.find(
+    (contact) => contact.active && contact.role === 'acting_ap_approver',
+  );
+
+  const attemptPortalFromBrowser = () =>
+    runCompatibilityAction('portal', async () => {
+      if (!eligibleContact) throw new Error('No active AP approver is available.');
+      await intentRuntime.uploadInvoiceToProcurementPortal(currentIntent.id, eligibleContact.id);
+      return `Portal delivery verified for ${eligibleContact.name}.`;
+    });
+
+  const issueGrantFromBrowser = () =>
+    runCompatibilityAction('grant', async () => {
+      if (!eligibleContact) throw new Error('No active AP approver is available.');
+      const maximumMinutes = customerPolicy?.enforcement.maximumLinkMinutes ?? 0;
+      const expirationMinutes = Math.min(60, maximumMinutes);
+      if (expirationMinutes < 1) throw new Error('The current policy does not permit temporary links.');
+      await intentRuntime.createScopedAccessGrant(
+        currentIntent.id,
+        eligibleContact.id,
+        expirationMinutes,
+        'read_invoice_only',
+        `Approved through the browser compatibility control for ${eligibleContact.name}.`,
+        'user',
+      );
+      return `Issued ${expirationMinutes}-minute read-only access for ${eligibleContact.name}.`;
+    });
+
+  const resumeFromBrowser = () =>
+    runCompatibilityAction('resume', async () => {
+      await intentRuntime.resumeIntent(currentIntent.id);
+      return 'Repaired email delivery completed using the existing invoice.';
+    });
+
+  const revokeFromBrowser = () =>
+    runCompatibilityAction('revoke', async () => {
+      await intentRuntime.revokeAlternateAccess(
+        currentIntent.id,
+        'Primary email delivery succeeded after the approved repair.',
+      );
+      return 'Temporary invoice access was revoked.';
+    });
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[3px] transition-opacity animate-fade-in text-slate-100 font-sans">
@@ -373,7 +433,12 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                 </div>
                 {intentRuntime.getRecoveryApproval() && (
                   <div className="text-slate-300">
-                    • Confirmation: <strong className="text-emerald-300">user-confirmed in agent conversation</strong>
+                    • Confirmation:{' '}
+                    <strong className="text-emerald-300">
+                      {intentRuntime.getRecoveryApproval()?.channel === 'webmcp_agent_conversation'
+                        ? 'user-confirmed in agent conversation'
+                        : 'confirmed through browser control'}
+                    </strong>
                   </div>
                 )}
                 <div className="text-slate-300">
@@ -439,6 +504,66 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
                   ? `Blocked · repair pipeline ${repairJob.status.replaceAll('_', ' ')}`
                   : 'Blocked by application defect'}
               </div>
+            </div>
+
+            <div className="p-3.5 bg-cyan-950/20 rounded-xl border border-cyan-500/30 space-y-2.5">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-cyan-300 block font-mono">
+                  Browser-agent compatibility actions
+                </span>
+                <p className="mt-1 text-[10px] text-slate-400 font-sans leading-relaxed">
+                  Use these visible controls only when the agent host can discover WebMCP tools but cannot invoke them. They call the same server-verified transitions; they are not WebMCP invocations.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2">
+                {isBlocked && (
+                  <button
+                    onClick={() => void attemptPortalFromBrowser()}
+                    disabled={compatibilityAction !== null}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-900/40 disabled:opacity-50"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    {compatibilityAction === 'portal' ? 'Attempting portal…' : `Attempt preferred portal${eligibleContact ? ` for ${eligibleContact.name}` : ''}`}
+                  </button>
+                )}
+                {isBlocked && !hasUsableGrant && (
+                  <button
+                    onClick={() => void issueGrantFromBrowser()}
+                    disabled={compatibilityAction !== null}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] font-semibold text-amber-100 transition-colors hover:bg-amber-900/40 disabled:opacity-50"
+                  >
+                    <Clock className="h-3.5 w-3.5" />
+                    {compatibilityAction === 'grant' ? 'Verifying grant…' : `Issue policy-bounded read-only grant${eligibleContact ? ` for ${eligibleContact.name}` : ''}`}
+                  </button>
+                )}
+                {isResumable && (
+                  <button
+                    onClick={() => void resumeFromBrowser()}
+                    disabled={compatibilityAction !== null}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-950/30 px-3 py-2 text-[11px] font-semibold text-indigo-100 transition-colors hover:bg-indigo-900/40 disabled:opacity-50"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    {compatibilityAction === 'resume' ? 'Resuming delivery…' : 'Resume repaired email delivery'}
+                  </button>
+                )}
+                {hasUsableGrant && (
+                  <button
+                    onClick={() => void revokeFromBrowser()}
+                    disabled={compatibilityAction !== null}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-950/20 px-3 py-2 text-[11px] font-semibold text-rose-100 transition-colors hover:bg-rose-900/30 disabled:opacity-50"
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                    {compatibilityAction === 'revoke' ? 'Revoking access…' : 'Revoke temporary access'}
+                  </button>
+                )}
+              </div>
+
+              {compatibilityResult && (
+                <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-[10px] text-slate-200 font-mono">
+                  {compatibilityResult}
+                </div>
+              )}
             </div>
 
             {/* Real Agent Prompting Area (§9) */}

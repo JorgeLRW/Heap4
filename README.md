@@ -91,6 +91,8 @@ Dynamic surface, registered only while the server would authorize it:
 
 Production registration is forwarded to the browser's real `document.modelContext.registerTool(...)`. The in-memory implementation in `src/webmcp/modelContext.ts` is installed by tests only and never attached to `document`, `window`, or `navigator`.
 
+Some browser-agent hosts can discover a page's WebMCP surface but cannot yet invoke page-defined tools. The Recovery tab therefore exposes clearly labeled compatibility controls for the same portal, grant, resume, and revoke transitions. These controls let a DOM-capable browser agent complete the demo through visible interaction while preserving every server-side policy and invariant check. They are explicitly presented as browser controls, not native WebMCP invocations; the WebMCP audit remains reserved for actual `document.modelContext` calls.
+
 ## The share link is a real capability
 
 Not a decorative URL. The alternate route mints a bearer token that is:
