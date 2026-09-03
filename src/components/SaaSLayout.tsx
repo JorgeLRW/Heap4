@@ -49,6 +49,7 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
   const isInvoiceCompleted = invoiceIntent?.status === 'completed';
   const isInvoiceInterrupted = invoiceIntent && invoiceIntent.status !== 'completed';
   const isInvoiceMitigated = invoiceIntent?.status === 'mitigated';
+  const hasUsableGrant = intentRuntime.hasUsableAccessGrant();
   // The server rejects re-dispatching an intent that already moved past 'active'.
   const canDispatch = !invoiceIntent || invoiceIntent.status === 'active';
 
@@ -67,7 +68,7 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
         description: 'Acme Corp can access invoice INV-2841 ($4,850.00)',
         outcome: 'Acme Corp can read invoice INV-2841 for $4,850',
         successCondition:
-          "invoice.deliveryStatus === 'sent' || accessGrant.active || procurementPortalReceipt.verifiedAt exists",
+          "invoice.deliveryStatus === 'sent' || (accessGrant.active && accessNoticeReceipt.sentAt exists) || procurementPortalReceipt.verifiedAt exists",
         primaryRoute: 'email_delivery',
         alternateRoutes: ['secure_share_link', 'procurement_portal'],
       },
@@ -297,6 +298,28 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({
                 </div>
                 <button className="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg text-xs font-mono">
                   Inspect Recovery Drawer →
+                </button>
+              </div>
+            )}
+
+            {isInvoiceCompleted && hasUsableGrant && invoiceIntent && (
+              <div
+                onClick={() => onOpenRecoveryDrawer(invoiceIntent)}
+                className="p-4 border rounded-2xl flex items-center justify-between cursor-pointer transition-all bg-amber-950/20 border-amber-500/30 hover:bg-amber-950/30"
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 shrink-0 text-amber-400" />
+                  <div className="text-xs">
+                    <div className="font-bold font-mono text-amber-300">
+                      Primary delivery complete · temporary access still active
+                    </div>
+                    <div className="text-slate-300 mt-0.5">
+                      Dana Lee's read-only grant remains usable and must be explicitly revoked.
+                    </div>
+                  </div>
+                </div>
+                <button className="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg text-xs font-mono">
+                  Review and revoke →
                 </button>
               </div>
             )}
