@@ -61,6 +61,8 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
   const [sourcePulse, setSourcePulse] = useState(false);
   const [compatibilityAction, setCompatibilityAction] = useState<'portal' | 'grant' | 'resume' | 'revoke' | null>(null);
   const [compatibilityResult, setCompatibilityResult] = useState<string | null>(null);
+  const [compatibilityContactId, setCompatibilityContactId] = useState('');
+  const [compatibilityExpirationMinutes, setCompatibilityExpirationMinutes] = useState(60);
 
   useEffect(() => {
     if (!agentFocus) return;
@@ -177,32 +179,29 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
     }
   };
 
-  const eligibleContact = authorizedContacts.find(
-    (contact) => contact.active && contact.role === 'acting_ap_approver',
+  const compatibilityContact = authorizedContacts.find(
+    (contact) => contact.id === compatibilityContactId,
   );
 
   const attemptPortalFromBrowser = () =>
     runCompatibilityAction('portal', async () => {
-      if (!eligibleContact) throw new Error('No active AP approver is available.');
-      await intentRuntime.uploadInvoiceToProcurementPortal(currentIntent.id, eligibleContact.id);
-      return `Portal delivery verified for ${eligibleContact.name}.`;
+      if (!compatibilityContact) throw new Error('Select a contact before attempting delivery.');
+      await intentRuntime.uploadInvoiceToProcurementPortal(currentIntent.id, compatibilityContact.id);
+      return `Portal delivery verified for ${compatibilityContact.name}.`;
     });
 
   const issueGrantFromBrowser = () =>
     runCompatibilityAction('grant', async () => {
-      if (!eligibleContact) throw new Error('No active AP approver is available.');
-      const maximumMinutes = customerPolicy?.enforcement.maximumLinkMinutes ?? 0;
-      const expirationMinutes = Math.min(60, maximumMinutes);
-      if (expirationMinutes < 1) throw new Error('The current policy does not permit temporary links.');
+      if (!compatibilityContact) throw new Error('Select a contact before requesting access.');
       await intentRuntime.createScopedAccessGrant(
         currentIntent.id,
-        eligibleContact.id,
-        expirationMinutes,
+        compatibilityContact.id,
+        compatibilityExpirationMinutes,
         'read_invoice_only',
-        `Approved through the browser compatibility control for ${eligibleContact.name}.`,
+        `Approved through the browser compatibility control for ${compatibilityContact.name}.`,
         'user',
       );
-      return `Issued ${expirationMinutes}-minute read-only access for ${eligibleContact.name}.`;
+      return `Issued ${compatibilityExpirationMinutes}-minute read-only access for ${compatibilityContact.name}.`;
     });
 
   const resumeFromBrowser = () =>
@@ -518,24 +517,66 @@ export const RecoveryDrawer: React.FC<RecoveryDrawerProps> = ({
 
               <div className="grid grid-cols-1 gap-2">
                 {isBlocked && (
-                  <button
-                    onClick={() => void attemptPortalFromBrowser()}
-                    disabled={compatibilityAction !== null}
-                    className="flex items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-900/40 disabled:opacity-50"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    {compatibilityAction === 'portal' ? 'Attempting portal…' : `Attempt preferred portal${eligibleContact ? ` for ${eligibleContact.name}` : ''}`}
-                  </button>
-                )}
-                {isBlocked && !hasUsableGrant && (
-                  <button
-                    onClick={() => void issueGrantFromBrowser()}
-                    disabled={compatibilityAction !== null}
-                    className="flex items-center justify-center gap-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] font-semibold text-amber-100 transition-colors hover:bg-amber-900/40 disabled:opacity-50"
-                  >
-                    <Clock className="h-3.5 w-3.5" />
-                    {compatibilityAction === 'grant' ? 'Verifying grant…' : `Issue policy-bounded read-only grant${eligibleContact ? ` for ${eligibleContact.name}` : ''}`}
-                  </button>
+                  <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/70 p-2.5">
+                    <label className="block space-y-1 text-[10px] text-slate-400 font-sans">
+                      <span>Contact proposed by agent</span>
+                      <select
+                        aria-label="Contact proposed by agent"
+                        value={compatibilityContactId}
+                        onChange={(event) => setCompatibilityContactId(event.target.value)}
+                        disabled={compatibilityAction !== null}
+                        className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-100 outline-none focus:border-cyan-500"
+                      >
+                        <option value="">Select a customer contact</option>
+                        {authorizedContacts.map((contact) => (
+                          <option key={contact.id} value={contact.id}>
+                            {contact.name} · {contact.role.replaceAll('_', ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <button
+                      onClick={() => void attemptPortalFromBrowser()}
+                      disabled={compatibilityAction !== null || !compatibilityContactId}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-900/40 disabled:opacity-50"
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                      {compatibilityAction === 'portal' ? 'Attempting portal…' : 'Attempt procurement portal'}
+                    </button>
+
+                    {!hasUsableGrant && (
+                      <div className="grid grid-cols-[1fr_auto] gap-2">
+                        <label className="block space-y-1 text-[10px] text-slate-400 font-sans">
+                          <span>Requested expiration</span>
+                          <input
+                            aria-label="Requested expiration in minutes"
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={compatibilityExpirationMinutes}
+                            onChange={(event) => setCompatibilityExpirationMinutes(Number(event.target.value))}
+                            disabled={compatibilityAction !== null}
+                            className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-100 outline-none focus:border-amber-500"
+                          />
+                        </label>
+                        <div className="self-end rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[10px] text-slate-300">
+                          read_invoice_only
+                        </div>
+                      </div>
+                    )}
+
+                    {!hasUsableGrant && (
+                      <button
+                        onClick={() => void issueGrantFromBrowser()}
+                        disabled={compatibilityAction !== null || !compatibilityContactId}
+                        className="flex w-full items-center justify-center gap-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] font-semibold text-amber-100 transition-colors hover:bg-amber-900/40 disabled:opacity-50"
+                      >
+                        <Clock className="h-3.5 w-3.5" />
+                        {compatibilityAction === 'grant' ? 'Verifying proposal…' : 'Request scoped access grant'}
+                      </button>
+                    )}
+                  </div>
                 )}
                 {isResumable && (
                   <button
