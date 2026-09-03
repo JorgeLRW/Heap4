@@ -26,6 +26,19 @@ outcome:  Acme Corp can read invoice INV-2841
   └─ route: secure_share_link   ← allowlisted, available right now
 ```
 
+## This invoice is one instance, not the whole claim
+
+The *pattern* here isn't invoice-specific. It's four pieces, defined generically in [intentTypes.ts](src/client/heap/intentTypes.ts) and [registerTools.ts](src/client/webmcp/registerTools.ts):
+
+- an `IntentStatus` lifecycle (`active → blocked → mitigated/resumable → completed`) that isn't about email at all,
+- a `GoalRoute` split between what the user needs and how it happens to be delivered,
+- `onIntentStatusChange`'s dynamic tool gating, which reads intent status and grant state, not invoice fields,
+- a capability-grant shape (scoped, expiring, revocable, access-tracked) that isn't about invoices either.
+
+Being precise about what that buys today, rather than overselling it: only one `GoalRoute` pair is actually implemented (`email_delivery` / `secure_share_link`), and the transition that grants access — `grantAlternateAccessTransition` in [demoTransitions.ts](src/shared/demoTransitions.ts) — is hardcoded against `state.invoice`, not a generic entity. `IntentGoal.kind` even has a second value, `'export_report'`, sitting in the type union — but it's a stub with zero logic behind it, not a second working workflow. I'm flagging that here so nobody has to find it and wonder if it's a hidden feature; it isn't.
+
+So the honest claim is: the lifecycle, the gating mechanism, and the grant shape would carry over to a different failure — a report export that times out, a payment that declines, a calendar invite that can't send — because none of that logic is written in terms of invoices. Wiring up a second route or a second `kind` is new code, not a config flag. This repo proves the mechanism once, completely, rather than proving it shallowly five times.
+
 ## The dynamic tool surface
 
 This is the part that is native to WebMCP and impossible in a static tool manifest. Heap 4's registered tools are a pure function of server state:
